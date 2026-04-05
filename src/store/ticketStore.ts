@@ -1,82 +1,69 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
-export type TicketPriority = 'low' | 'medium' | 'high' | 'urgent';
-export type TicketStatus = 'open' | 'in-progress' | 'resolved' | 'closed';
-export interface Ticket {
-  id: string;
-  title: string;
-  description: string;
-  customerName: string;
-  priority: TicketPriority;
-  status: TicketStatus;
-  category: string;
-  createdAt: string;
-  transcript?: string;
-  aiLogs?: string;
-}
+import type { Ticket, TicketPriority, TicketStatus } from '../../worker/types';
 interface TicketState {
   tickets: Ticket[];
-  addTicket: (ticket: Ticket) => void;
-  updateTicketStatus: (id: string, status: TicketStatus) => void;
-  updateTicket: (id: string, updates: Partial<Ticket>) => void;
+  isLoading: boolean;
+  error: string | null;
+  initialize: () => Promise<void>;
+  addTicket: (ticket: Ticket) => Promise<void>;
+  updateTicketStatus: (id: string, status: TicketStatus) => Promise<void>;
+  updateTicket: (id: string, updates: Partial<Ticket>) => Promise<void>;
 }
-const MOCK_TICKETS: Ticket[] = [
-  {
-    id: 'T-1001',
-    title: 'Internet Connection Dropping',
-    description: 'Customer reporting intermittent connectivity issues in the North region.',
-    customerName: 'Sarah Jenkins',
-    priority: 'high',
-    status: 'open',
-    category: 'Technical Support',
-    createdAt: new Date(Date.now() - 3600000).toISOString(),
-    transcript: "Agent: Hello, Sarah. How can I help?\nCustomer: My internet has been cutting out all day.\nAgent: Which region are you in?\nCustomer: North Downtown."
+export const useTicketStore = create<TicketState>((set, get) => ({
+  tickets: [],
+  isLoading: false,
+  error: null,
+  initialize: async () => {
+    set({ isLoading: true });
+    try {
+      const res = await fetch('/api/tickets');
+      const json = await res.json();
+      if (json.success) {
+        set({ tickets: json.data, isLoading: false });
+      } else {
+        throw new Error(json.error);
+      }
+    } catch (err: any) {
+      set({ error: err.message, isLoading: false });
+    }
   },
-  {
-    id: 'T-1002',
-    title: 'Billing Discrepancy - April',
-    description: 'Overcharged by $15 on the latest monthly subscription invoice.',
-    customerName: 'Michael Chen',
-    priority: 'medium',
-    status: 'in-progress',
-    category: 'Billing',
-    createdAt: new Date(Date.now() - 7200000).toISOString(),
+  addTicket: async (ticket) => {
+    const prev = get().tickets;
+    set({ tickets: [ticket, ...prev] }); // Optimistic
+    try {
+      await fetch('/api/tickets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(ticket)
+      });
+    } catch (err) {
+      set({ tickets: prev }); // Rollback
+    }
   },
-  {
-    id: 'T-1003',
-    title: 'Feature Request: Dark Mode',
-    description: 'User suggests adding a native dark mode to the mobile application.',
-    customerName: 'Alex Rivera',
-    priority: 'low',
-    status: 'open',
-    category: 'Feedback',
-    createdAt: new Date(Date.now() - 86400000).toISOString(),
+  updateTicketStatus: async (id, status) => {
+    const prev = get().tickets;
+    set({ tickets: prev.map(t => t.id === id ? { ...t, status } : t) });
+    try {
+      await fetch(`/api/tickets/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status })
+      });
+    } catch (err) {
+      set({ tickets: prev });
+    }
   },
-  {
-    id: 'T-1004',
-    title: 'Account Locked - 3 Attempts',
-    description: 'User locked out after multiple failed password attempts.',
-    customerName: 'Emma Wilson',
-    priority: 'urgent',
-    status: 'resolved',
-    category: 'Security',
-    createdAt: new Date(Date.now() - 120000).toISOString(),
-  }
-];
-export const useTicketStore = create<TicketState>()(
-  persist(
-    (set) => ({
-      tickets: MOCK_TICKETS,
-      addTicket: (ticket) => set((state) => ({
-        tickets: [ticket, ...state.tickets]
-      })),
-      updateTicketStatus: (id, status) => set((state) => ({
-        tickets: state.tickets.map(t => t.id === id ? { ...t, status } : t)
-      })),
-      updateTicket: (id, updates) => set((state) => ({
-        tickets: state.tickets.map(t => t.id === id ? { ...t, ...updates } : t)
-      })),
-    }),
-    { name: 'voxcare-tickets' }
-  )
-);
+  updateTicket: async (id, updates) => {
+    const prev = get().tickets;
+    set({ tickets: prev.map(t => t.id === id ? { ...t, ...updates } : t) });
+    try {
+      await fetch(`/api/tickets/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates)
+      });
+    } catch (err) {
+      set({ tickets: prev });
+    }
+  },
+}));

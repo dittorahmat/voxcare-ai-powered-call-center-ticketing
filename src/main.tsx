@@ -1,7 +1,7 @@
 import '@/lib/errorReporter';
 import { enableMapSet } from "immer";
 enableMapSet();
-import { StrictMode } from 'react'
+import { StrictMode, useEffect } from 'react'
 import { createRoot } from 'react-dom/client'
 import {
   createBrowserRouter,
@@ -17,6 +17,7 @@ import { Dashboard } from '@/pages/Dashboard'
 import { Tickets } from '@/pages/Tickets'
 import { LiveCall } from '@/pages/LiveCall'
 import { TicketDetails } from '@/pages/TicketDetails'
+import { useTicketStore } from '@/store/ticketStore';
 const queryClient = new QueryClient();
 const router = createBrowserRouter([
   {
@@ -35,11 +36,20 @@ const router = createBrowserRouter([
     element: <Navigate to="/" replace />,
   }
 ]);
+function AppInitializer({ children }: { children: React.ReactNode }) {
+  const initialize = useTicketStore(s => s.initialize);
+  useEffect(() => {
+    initialize();
+  }, [initialize]);
+  return <>{children}</>;
+}
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
       <ErrorBoundary>
-        <RouterProvider router={router} />
+        <AppInitializer>
+          <RouterProvider router={router} />
+        </AppInitializer>
       </ErrorBoundary>
     </QueryClientProvider>
   </StrictMode>,
