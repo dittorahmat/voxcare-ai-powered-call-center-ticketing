@@ -36,7 +36,7 @@ const router = createBrowserRouter([
     element: <Navigate to="/" replace />,
   }
 ]);
-function AppInitializer({ children }: { children: React.ReactNode }) {
+export function AppInitializer({ children }: { children: React.ReactNode }) {
   const initialize = useTicketStore(s => s.initialize);
   useEffect(() => {
     initialize();

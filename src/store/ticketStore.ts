@@ -11,15 +11,15 @@ interface TicketState {
 }
 export const useTicketStore = create<TicketState>((set, get) => ({
   tickets: [],
-  isLoading: false,
+  isLoading: true,
   error: null,
   initialize: async () => {
-    set({ isLoading: true });
+    set({ error: null });
     try {
       const res = await fetch('/api/tickets');
       const json = await res.json();
       if (json.success) {
-        set({ tickets: json.data, isLoading: false });
+        set({ tickets: json.data, isLoading: false, error: null });
       } else {
         throw new Error(json.error);
       }
@@ -28,8 +28,8 @@ export const useTicketStore = create<TicketState>((set, get) => ({
     }
   },
   addTicket: async (ticket) => {
-    const prev = get().tickets;
-    set({ tickets: [ticket, ...prev] }); // Optimistic
+    const prevState = get();
+    set({ tickets: [ticket, ...prevState.tickets] }); // Optimistic
     try {
       await fetch('/api/tickets', {
         method: 'POST',
@@ -37,12 +37,12 @@ export const useTicketStore = create<TicketState>((set, get) => ({
         body: JSON.stringify(ticket)
       });
     } catch (err) {
-      set({ tickets: prev }); // Rollback
+      set(prevState); // Rollback
     }
   },
   updateTicketStatus: async (id, status) => {
-    const prev = get().tickets;
-    set({ tickets: prev.map(t => t.id === id ? { ...t, status } : t) });
+    const prevState = get();
+    set({ tickets: prevState.tickets.map(t => t.id === id ? { ...t, status } : t) });
     try {
       await fetch(`/api/tickets/${id}`, {
         method: 'PATCH',
@@ -50,12 +50,12 @@ export const useTicketStore = create<TicketState>((set, get) => ({
         body: JSON.stringify({ status })
       });
     } catch (err) {
-      set({ tickets: prev });
+      set(prevState);
     }
   },
   updateTicket: async (id, updates) => {
-    const prev = get().tickets;
-    set({ tickets: prev.map(t => t.id === id ? { ...t, ...updates } : t) });
+    const prevState = get();
+    set({ tickets: prevState.tickets.map(t => t.id === id ? { ...t, ...updates } : t) });
     try {
       await fetch(`/api/tickets/${id}`, {
         method: 'PATCH',
@@ -63,7 +63,7 @@ export const useTicketStore = create<TicketState>((set, get) => ({
         body: JSON.stringify(updates)
       });
     } catch (err) {
-      set({ tickets: prev });
+      set(prevState);
     }
   },
 }));

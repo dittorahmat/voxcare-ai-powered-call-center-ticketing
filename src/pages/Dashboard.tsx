@@ -6,7 +6,7 @@ import { Inbox, CheckCircle2, Clock, Activity, ArrowUpRight, PhoneCall } from 'l
 import { formatDistanceToNow } from 'date-fns';
 import { Link } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
-import { PieChart, Pie, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip } from 'recharts';
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 export function Dashboard() {
   const tickets = useTicketStore(s => s.tickets);
   const isLoading = useTicketStore(s => s.isLoading);
@@ -17,14 +17,15 @@ export function Dashboard() {
     { label: 'High Priority', value: tickets.filter(t => t.priority === 'urgent' || t.priority === 'high').length, icon: Clock, color: 'text-red-600', bg: 'bg-red-50' },
   ], [tickets]);
   const priorityData = useMemo(() => {
+    if (tickets.length === 0) return [];
     const counts = { low: 0, medium: 0, high: 0, urgent: 0 };
     tickets.forEach(t => counts[t.priority]++);
     return Object.entries(counts).map(([name, value]) => ({ name, value }));
   }, [tickets]);
   const COLORS = ['#94a3b8', '#fbbf24', '#f87171', '#ef4444'];
   const recentTickets = useMemo(() => 
-    [...tickets].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 5)
-  , [tickets]);
+    [...tickets].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 5),
+  [tickets]);
   if (isLoading) {
     return <div className="flex items-center justify-center min-h-[400px]"><Activity className="animate-spin text-indigo-600" /></div>;
   }
@@ -59,15 +60,17 @@ export function Dashboard() {
               <CardDescription>Visual breakdown of current ticket workload.</CardDescription>
             </div>
           </CardHeader>
-          <CardContent className="p-6 h-[300px]">
-             <ResponsiveContainer width="100%" height="100%">
-               <PieChart>
-                 <Pie data={priorityData} cx="50%" cy="50%" innerRadius={60} outerRadius={80} paddingAngle={5} dataKey="value">
-                   {priorityData.map((entry, index) => <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />)}
-                 </Pie>
-                 <Tooltip />
-               </PieChart>
-             </ResponsiveContainer>
+          <CardContent className="p-6">
+            <div className="w-full h-[300px]">
+              <ResponsiveContainer width="100%" height="100%" minHeight={300} aspect={1}>
+                <PieChart>
+                  <Pie data={priorityData} cx="50%" cy="50%" innerRadius={60} outerRadius={80} paddingAngle={5} dataKey="value">
+                    {priorityData.map((entry, index) => <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />)}
+                  </Pie>
+                  <Tooltip />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
           </CardContent>
         </Card>
         <Card className="border-none shadow-xl bg-indigo-600 text-white relative overflow-hidden group">
