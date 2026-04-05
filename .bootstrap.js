@@ -78,7 +78,8 @@ function updateWranglerJsonc() {
 
 function runSetupCommands() {
     const commands = [
-    "bun add @tanstack/react-table@^8.20.5"
+    "bun add @tanstack/react-table@^8.20.5",
+    "bun add recharts"
 ];
     
     if (commands.length === 0) {
