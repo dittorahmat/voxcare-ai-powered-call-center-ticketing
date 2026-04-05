@@ -2,7 +2,7 @@ import React from 'react';
 import { useTicketStore } from '@/store/ticketStore';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Inbox, CheckCircle2, Clock, Activity, ArrowUpRight } from 'lucide-react';
+import { Inbox, CheckCircle2, Clock, Activity, ArrowUpRight, PhoneCall } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { Link } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
@@ -66,7 +66,7 @@ export function Dashboard() {
                     <Badge variant={ticket.priority === 'urgent' ? 'destructive' : 'secondary'} className="capitalize text-[10px]">
                       {ticket.priority}
                     </Badge>
-                    <Link to={`/tickets`} className="p-2 rounded-full hover:bg-slate-200 transition-colors text-slate-400">
+                    <Link to={`/tickets/${ticket.id}`} className="p-2 rounded-full hover:bg-slate-200 transition-colors text-slate-400">
                       <ArrowUpRight className="size-4" />
                     </Link>
                   </div>

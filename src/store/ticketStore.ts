@@ -12,11 +12,13 @@ export interface Ticket {
   category: string;
   createdAt: string;
   transcript?: string;
+  aiLogs?: string;
 }
 interface TicketState {
   tickets: Ticket[];
   addTicket: (ticket: Ticket) => void;
   updateTicketStatus: (id: string, status: TicketStatus) => void;
+  updateTicket: (id: string, updates: Partial<Ticket>) => void;
 }
 const MOCK_TICKETS: Ticket[] = [
   {
@@ -28,6 +30,7 @@ const MOCK_TICKETS: Ticket[] = [
     status: 'open',
     category: 'Technical Support',
     createdAt: new Date(Date.now() - 3600000).toISOString(),
+    transcript: "Agent: Hello, Sarah. How can I help?\nCustomer: My internet has been cutting out all day.\nAgent: Which region are you in?\nCustomer: North Downtown."
   },
   {
     id: 'T-1002',
@@ -58,27 +61,20 @@ const MOCK_TICKETS: Ticket[] = [
     status: 'resolved',
     category: 'Security',
     createdAt: new Date(Date.now() - 120000).toISOString(),
-  },
-  {
-    id: 'T-1005',
-    title: 'New Service Installation',
-    description: 'Scheduled fiber optic installation for new residential customer.',
-    customerName: 'David Miller',
-    priority: 'medium',
-    status: 'in-progress',
-    category: 'Service',
-    createdAt: new Date(Date.now() - 18000000).toISOString(),
   }
 ];
 export const useTicketStore = create<TicketState>()(
   persist(
     (set) => ({
       tickets: MOCK_TICKETS,
-      addTicket: (ticket) => set((state) => ({ 
-        tickets: [ticket, ...state.tickets] 
+      addTicket: (ticket) => set((state) => ({
+        tickets: [ticket, ...state.tickets]
       })),
       updateTicketStatus: (id, status) => set((state) => ({
         tickets: state.tickets.map(t => t.id === id ? { ...t, status } : t)
+      })),
+      updateTicket: (id, updates) => set((state) => ({
+        tickets: state.tickets.map(t => t.id === id ? { ...t, ...updates } : t)
       })),
     }),
     { name: 'voxcare-tickets' }

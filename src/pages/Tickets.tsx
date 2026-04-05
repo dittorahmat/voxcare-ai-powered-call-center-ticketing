@@ -1,26 +1,27 @@
 import React, { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useTicketStore } from '@/store/ticketStore';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
-import { Search, Filter, MoreHorizontal, ArrowUpDown } from 'lucide-react';
+import { Search, Filter, Inbox, ExternalLink } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 export function Tickets() {
-  const tickets = useTicketStore(state => state.tickets);
+  const tickets = useTicketStore(s => s.tickets);
   const [searchQuery, setSearchQuery] = useState('');
-  const filteredTickets = tickets.filter(t => 
+  const filteredTickets = tickets.filter(t =>
     t.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
     t.customerName.toLowerCase().includes(searchQuery.toLowerCase()) ||
     t.id.toLowerCase().includes(searchQuery.toLowerCase())
   );
   const getStatusColor = (status: string) => {
     switch (status) {
-      case 'open': return 'bg-blue-100 text-blue-700 border-blue-200';
-      case 'in-progress': return 'bg-amber-100 text-amber-700 border-amber-200';
-      case 'resolved': return 'bg-emerald-100 text-emerald-700 border-emerald-200';
-      case 'closed': return 'bg-slate-100 text-slate-700 border-slate-200';
-      default: return 'bg-slate-100 text-slate-700';
+      case 'open': return 'bg-blue-50 text-blue-700 border-blue-200';
+      case 'in-progress': return 'bg-amber-50 text-amber-700 border-amber-200';
+      case 'resolved': return 'bg-emerald-50 text-emerald-700 border-emerald-200';
+      case 'closed': return 'bg-slate-50 text-slate-700 border-slate-200';
+      default: return 'bg-slate-50 text-slate-700';
     }
   };
   return (
@@ -34,15 +35,17 @@ export function Tickets() {
           <Button variant="outline" className="gap-2">
             <Filter className="size-4" /> Filters
           </Button>
-          <Button className="bg-indigo-600 hover:bg-indigo-700">New Ticket</Button>
+          <Button className="bg-indigo-600 hover:bg-indigo-700" asChild>
+            <Link to="/live-call">New Live Ticket</Link>
+          </Button>
         </div>
       </div>
       <Card className="border-none shadow-sm bg-white overflow-hidden">
         <CardHeader className="p-4 px-6 border-b border-slate-50 flex flex-row items-center gap-4">
           <div className="relative flex-1 max-w-sm">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
-            <Input 
-              placeholder="Filter by title, customer..." 
+            <Input
+              placeholder="Filter by title, customer..."
               className="pl-9 h-10"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
@@ -62,7 +65,7 @@ export function Tickets() {
                   <th className="px-6 py-4">Customer</th>
                   <th className="px-6 py-4">Priority</th>
                   <th className="px-6 py-4">Created</th>
-                  <th className="px-6 py-4 text-right">Actions</th>
+                  <th className="px-6 py-4 text-right">View</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-50">
@@ -76,7 +79,7 @@ export function Tickets() {
                       </div>
                     </td>
                     <td className="px-6 py-4">
-                      <Badge variant="outline" className={cn("capitalize px-2 py-0.5 font-medium border", getStatusColor(ticket.status))}>
+                      <Badge variant="outline" className={cn("capitalize px-2.5 py-0.5 font-medium border", getStatusColor(ticket.status))}>
                         {ticket.status.replace('-', ' ')}
                       </Badge>
                     </td>
@@ -90,8 +93,8 @@ export function Tickets() {
                       {new Date(ticket.createdAt).toLocaleDateString()}
                     </td>
                     <td className="px-6 py-4 text-right">
-                      <Button variant="ghost" size="icon" className="text-slate-400 hover:text-slate-900">
-                        <MoreHorizontal className="size-4" />
+                      <Button variant="ghost" size="icon" asChild className="text-slate-400 hover:text-indigo-600">
+                        <Link to={`/tickets/${ticket.id}`}><ExternalLink className="size-4" /></Link>
                       </Button>
                     </td>
                   </tr>
@@ -100,12 +103,13 @@ export function Tickets() {
             </table>
           </div>
           {filteredTickets.length === 0 && (
-            <div className="py-20 text-center">
-              <div className="inline-flex items-center justify-center h-12 w-12 rounded-full bg-slate-100 text-slate-400 mb-4">
-                <Search className="size-6" />
+            <div className="py-24 text-center">
+              <div className="inline-flex items-center justify-center h-16 w-16 rounded-full bg-slate-50 text-slate-300 mb-4">
+                <Inbox className="size-8" />
               </div>
-              <p className="text-slate-500 font-medium">No tickets found matching your search.</p>
-              <Button variant="link" onClick={() => setSearchQuery('')} className="text-indigo-600">Clear filters</Button>
+              <h3 className="text-lg font-semibold text-slate-900">No tickets found</h3>
+              <p className="text-slate-500 max-w-xs mx-auto mt-1">Try adjusting your search filters or start a new live call intake.</p>
+              <Button variant="outline" onClick={() => setSearchQuery('')} className="mt-6">Clear search</Button>
             </div>
           )}
         </CardContent>

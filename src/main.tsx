@@ -16,6 +16,7 @@ import { MainLayout } from '@/components/layout/MainLayout'
 import { Dashboard } from '@/pages/Dashboard'
 import { Tickets } from '@/pages/Tickets'
 import { LiveCall } from '@/pages/LiveCall'
+import { TicketDetails } from '@/pages/TicketDetails'
 const queryClient = new QueryClient();
 const router = createBrowserRouter([
   {
@@ -25,6 +26,7 @@ const router = createBrowserRouter([
     children: [
       { index: true, element: <Dashboard /> },
       { path: "tickets", element: <Tickets /> },
+      { path: "tickets/:id", element: <TicketDetails /> },
       { path: "live-call", element: <LiveCall /> },
     ],
   },
