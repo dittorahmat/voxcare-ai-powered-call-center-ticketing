@@ -23,8 +23,8 @@ export function Dashboard() {
     return Object.entries(counts).map(([name, value]) => ({ name, value }));
   }, [tickets]);
   const COLORS = ['#94a3b8', '#fbbf24', '#f87171', '#ef4444'];
-  const recentTickets = useMemo(() => 
-    [...tickets].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 5),
+  const recentTickets = useMemo(() =>
+    [...tickets].sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()).slice(0, 5),
   [tickets]);
   if (isLoading) {
     return <div className="flex items-center justify-center min-h-[400px]"><Activity className="animate-spin text-indigo-600" /></div>;
@@ -61,15 +61,21 @@ export function Dashboard() {
             </div>
           </CardHeader>
           <CardContent className="p-6">
-            <div className="w-full h-[300px]">
-              <ResponsiveContainer width="100%" height="100%" minHeight={300} aspect={1}>
-                <PieChart>
-                  <Pie data={priorityData} cx="50%" cy="50%" innerRadius={60} outerRadius={80} paddingAngle={5} dataKey="value">
-                    {priorityData.map((entry, index) => <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />)}
-                  </Pie>
-                  <Tooltip />
-                </PieChart>
-              </ResponsiveContainer>
+            <div className="w-full h-[350px]">
+              {priorityData.length === 0 ? (
+                <div className="flex items-center justify-center h-full">
+                  <span className="text-muted-foreground text-sm">No data</span>
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" minHeight={300} aspect={1.25}>
+                  <PieChart>
+                    <Pie data={priorityData} cx="50%" cy="50%" innerRadius={60} outerRadius={80} paddingAngle={5} dataKey="value">
+                      {priorityData.map((entry, index) => <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />)}
+                    </Pie>
+                    <Tooltip />
+                  </PieChart>
+                </ResponsiveContainer>
+              )}
             </div>
           </CardContent>
         </Card>
@@ -118,7 +124,7 @@ export function Dashboard() {
                     <div className="flex items-center gap-3 text-xs text-muted-foreground">
                       <span>{ticket.customerName}</span>
                       <span className="h-1 w-1 rounded-full bg-slate-300" />
-                      <span>{formatDistanceToNow(new Date(ticket.createdAt))} ago</span>
+                      <span>{ticket.createdAt ? formatDistanceToNow(new Date(ticket.createdAt)) : 'Unknown'} ago</span>
                     </div>
                   </div>
                   <div className="flex items-center gap-4">
