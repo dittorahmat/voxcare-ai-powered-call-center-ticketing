@@ -36,21 +36,14 @@ const router = createBrowserRouter([
     element: <Navigate to="/" replace />,
   }
 ]);
-export function AppInitializer({ children }: { children: React.ReactNode }) {
-  const initialize = useTicketStore(s => s.initialize);
-  useEffect(() => {
-    initialize();
-  }, [initialize]);
-  return <>{children}</>;
-}
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
       <ErrorBoundary>
-        <AppInitializer>
-          <RouterProvider router={router} />
-        </AppInitializer>
+        <RouterProvider router={router} />
       </ErrorBoundary>
     </QueryClientProvider>
   </StrictMode>,
-)
+);
+
+useTicketStore.getState().initialize().catch(console.error);
