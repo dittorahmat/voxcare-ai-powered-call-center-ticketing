@@ -1,20 +1,29 @@
 export interface ApiResponse<T = unknown> { success: boolean; data?: T; error?: string; }
-
 export interface WeatherResult {
   location: string;
   temperature: number;
   condition: string;
   humidity: number;
 }
-
 export interface MCPResult {
   content: string;
 }
-
 export interface ErrorResult {
   error: string;
 }
-
+export type TicketPriority = 'low' | 'medium' | 'high' | 'urgent';
+export type TicketStatus = 'open' | 'in-progress' | 'resolved';
+export interface Ticket {
+  id: string;
+  title: string;
+  description: string;
+  customerName: string;
+  priority: TicketPriority;
+  status: TicketStatus;
+  category: string;
+  createdAt: string;
+  transcript?: string;
+}
 export interface Message {
   role: 'user' | 'assistant' | 'system';
   content: string;
@@ -22,14 +31,12 @@ export interface Message {
   id: string;
   toolCalls?: ToolCall[];
 }
-
 export interface ToolCall {
   id: string;
   name: string;
   arguments: Record<string, unknown>;
   result?: unknown;
 }
-
 export interface ChatState {
   messages: Message[];
   sessionId: string;
@@ -37,14 +44,12 @@ export interface ChatState {
   model: string;
   streamingMessage?: string;
 }
-
 export interface SessionInfo {
   id: string;
   title: string;
   createdAt: number;
   lastActive: number;
 }
-
 export interface Tool {
   name: string;
   description: string;

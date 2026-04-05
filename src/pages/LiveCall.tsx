@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { Mic, Sparkles, Loader2, Save, Trash2, User, PhoneOff, BrainCircuit } from 'lucide-react';
+import { motion } from 'framer-motion';
+import { Mic, Sparkles, Save, Trash2, PhoneOff, BrainCircuit } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -25,13 +25,11 @@ export function LiveCall() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animationRef = useRef<number>(0);
   const scrollRef = useRef<HTMLDivElement>(null);
-  // Auto-scroll transcript
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [transcript]);
-  // Sine wave visualization
   useEffect(() => {
     if (!isRecording || !canvasRef.current) return;
     const canvas = canvasRef.current;
@@ -56,9 +54,9 @@ export function LiveCall() {
     return () => cancelAnimationFrame(animationRef.current);
   }, [isRecording]);
   const handleStartCall = useCallback(() => {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      toast.error("Browser not supported.");
+      toast.error("Browser not supported for speech recognition.");
       return;
     }
     setTranscript([]);
@@ -76,19 +74,24 @@ export function LiveCall() {
   const handleEndCall = async () => {
     recognitionRef.current?.stop();
     setIsRecording(false);
-    if (transcript.length < 2) return;
+    if (transcript.length < 1) return;
     setIsAnalyzing(true);
     try {
       const prompt = `Extract ticket details: { "title": string, "description": string, "priority": "low"|"medium"|"high"|"urgent", "category": string }. Transcript:\n${transcript.join('\n')}`;
       const res = await chatService.sendMessage(prompt, 'google-ai-studio/gemini-2.5-flash');
       if (res.success && res.data?.messages) {
         const content = res.data.messages[res.data.messages.length - 1].content;
-        const extracted = JSON.parse(content.match(/\{[\s\S]*\}/)![0]);
-        setDraftTicket(extracted);
-        toast.success("AI extraction complete.");
+        const match = content.match(/\{[\s\S]*\}/);
+        if (match) {
+          const extracted = JSON.parse(match[0]);
+          setDraftTicket(extracted);
+          toast.success("AI extraction complete.");
+        } else {
+          toast.error("AI returned invalid format.");
+        }
       }
     } catch (e) {
-      toast.error("AI failed to parse.");
+      toast.error("AI failed to parse interaction.");
     } finally {
       setIsAnalyzing(false);
     }
@@ -108,22 +111,21 @@ export function LiveCall() {
     toast.success("Ticket saved to cloud.");
   };
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 md:py-10 lg:py-12 h-[calc(100vh-8rem)] min-h-[700px]">
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 md:py-10 lg:py-12 min-h-[calc(100vh-8rem)]">
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-10 h-full">
-        {/* Recording Console */}
         <div className="flex flex-col gap-6 h-full">
           <div className="flex items-center justify-between">
             <h1 className="text-3xl font-bold tracking-tight">Voice Intake</h1>
             {isRecording && <Badge variant="destructive" className="animate-pulse">Live Call</Badge>}
           </div>
-          <Card className="flex-1 flex flex-col border-none shadow-xl bg-white overflow-hidden">
+          <Card className="flex-1 flex flex-col border-none shadow-xl bg-white overflow-hidden min-h-[500px]">
             <div className="p-4 bg-slate-50 border-b flex justify-between items-center h-12">
               <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">Transcription Feed</span>
               {isRecording && <canvas ref={canvasRef} width={100} height={30} className="rounded" />}
             </div>
             <CardContent ref={scrollRef} className="flex-1 overflow-y-auto p-6 space-y-4">
               {transcript.length === 0 && !isRecording && (
-                <div className="h-full flex flex-col items-center justify-center opacity-30">
+                <div className="h-full flex flex-col items-center justify-center opacity-30 py-20">
                   <Mic className="size-16 mb-4" />
                   <p>Ready to record...</p>
                 </div>
@@ -142,7 +144,6 @@ export function LiveCall() {
             </div>
           </Card>
         </div>
-        {/* AI Analysis Panel */}
         <div className="flex flex-col gap-6">
           <div className="flex items-center gap-2">
             <BrainCircuit className="text-indigo-600 size-6" />
@@ -191,7 +192,7 @@ export function LiveCall() {
                 </Card>
               </motion.div>
             ) : (
-              <div className="h-full border-2 border-dashed border-slate-200 rounded-2xl flex flex-col items-center justify-center text-center p-12 text-slate-400">
+              <div className="h-full border-2 border-dashed border-slate-200 rounded-2xl flex flex-col items-center justify-center text-center p-12 text-slate-400 min-h-[400px]">
                 <Sparkles className="size-12 mb-4 opacity-20" />
                 <p className="font-medium">Analysis Stage</p>
                 <p className="text-sm">End a call to trigger automatic ticket extraction here.</p>

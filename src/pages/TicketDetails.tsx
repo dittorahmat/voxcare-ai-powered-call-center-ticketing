@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useParams, Link } from 'react-router-dom';
 import { useTicketStore } from '@/store/ticketStore';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -15,7 +15,6 @@ import {
   MessageSquare,
   Sparkles,
   ShieldAlert,
-  Clock,
   CheckCircle2,
   Save,
   Check
@@ -23,7 +22,6 @@ import {
 import { format } from 'date-fns';
 export function TicketDetails() {
   const { id } = useParams();
-  const navigate = useNavigate();
   const tickets = useTicketStore(s => s.tickets);
   const updateTicketStatus = useTicketStore(s => s.updateTicketStatus);
   const updateTicket = useTicketStore(s => s.updateTicket);
@@ -31,9 +29,18 @@ export function TicketDetails() {
   const [localDesc, setLocalDesc] = useState(ticket?.description || '');
   const [isSaving, setIsSaving] = useState(false);
   useEffect(() => {
-    if (ticket) setLocalDesc(ticket.description);
-  }, [ticket?.id]);
-  if (!ticket) return <div className="p-20 text-center"><h2 className="text-2xl font-bold">Ticket not found</h2><Link to="/tickets">Go back</Link></div>;
+    if (ticket) {
+      setLocalDesc(ticket.description);
+    }
+  }, [ticket]);
+  if (!ticket) {
+    return (
+      <div className="p-20 text-center">
+        <h2 className="text-2xl font-bold">Ticket not found</h2>
+        <Link to="/tickets" className="text-indigo-600 hover:underline mt-2 inline-block">Go back to Ticket Center</Link>
+      </div>
+    );
+  }
   const handleStatusChange = (newStatus: any) => updateTicketStatus(ticket.id, newStatus);
   const saveNotes = async () => {
     setIsSaving(true);
@@ -41,9 +48,24 @@ export function TicketDetails() {
     setTimeout(() => setIsSaving(false), 800);
   };
   const timeline = [
-    { date: ticket.createdAt, event: "Ticket Created via Voice Intake", icon: Sparkles, color: "text-indigo-600" },
-    { date: ticket.createdAt, event: "AI Content Extraction Completed", icon: ShieldAlert, color: "text-amber-600" },
-    ...(ticket.status !== 'open' ? [{ date: new Date().toISOString(), event: `Status updated to ${ticket.status}`, icon: CheckCircle2, color: "text-emerald-600" }] : [])
+    { 
+      date: ticket.createdAt, 
+      event: ticket.transcript ? "Ticket Created via Voice Intake" : "Ticket Created Manually", 
+      icon: Sparkles, 
+      color: "text-indigo-600" 
+    },
+    { 
+      date: ticket.createdAt, 
+      event: "Priority Assessment Completed", 
+      icon: ShieldAlert, 
+      color: "text-amber-600" 
+    },
+    ...(ticket.status !== 'open' ? [{ 
+      date: new Date().toISOString(), 
+      event: `Status updated to ${ticket.status}`, 
+      icon: CheckCircle2, 
+      color: "text-emerald-600" 
+    }] : [])
   ];
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 md:py-10 lg:py-12 animate-fade-in space-y-8">
@@ -68,7 +90,7 @@ export function TicketDetails() {
               </CardTitle>
             </CardHeader>
             <CardContent className="p-0">
-              <Tabs defaultValue="transcript" className="w-full">
+              <Tabs defaultValue={ticket.transcript ? "transcript" : "notes"} className="w-full">
                 <TabsList className="w-full grid grid-cols-2 rounded-none bg-slate-50/50">
                   <TabsTrigger value="transcript" className="data-[state=active]:bg-white rounded-none border-b-2 data-[state=active]:border-indigo-600">Voice Transcript</TabsTrigger>
                   <TabsTrigger value="notes" className="data-[state=active]:bg-white rounded-none border-b-2 data-[state=active]:border-indigo-600">Resolution Notes</TabsTrigger>
@@ -84,7 +106,7 @@ export function TicketDetails() {
                             </div>
                           ))}
                         </div>
-                      ) : <p className="text-center py-20 text-slate-400">No recording data available.</p>}
+                      ) : <p className="text-center py-20 text-slate-400">No recording data available for this manual ticket.</p>}
                     </div>
                   </TabsContent>
                   <TabsContent value="notes" className="space-y-4 m-0">
@@ -124,14 +146,14 @@ export function TicketDetails() {
         <div className="space-y-6">
           <Card className="border-none shadow-xl bg-white overflow-hidden ring-1 ring-indigo-50">
             <div className="p-4 bg-indigo-600 text-white flex items-center justify-between">
-              <span className="text-[10px] font-bold uppercase tracking-widest">AI Intelligence</span>
-              <Badge className="bg-indigo-400/50 text-white border-none">94% Confidence</Badge>
+              <span className="text-[10px] font-bold uppercase tracking-widest">Ticket Intelligence</span>
+              <Badge className="bg-indigo-400/50 text-white border-none">Validated</Badge>
             </div>
             <CardContent className="p-6 space-y-6">
                <div className="grid grid-cols-1 gap-4">
                  <div className="p-4 bg-slate-50 rounded-xl border border-slate-100">
                    <p className="text-[10px] font-bold text-slate-400 uppercase mb-2">Priority Vector</p>
-                   <Badge variant={ticket.priority === 'urgent' ? 'destructive' : 'secondary'} className="w-full justify-center py-2 text-sm">{ticket.priority.toUpperCase()}</Badge>
+                   <Badge variant={ticket.priority === 'urgent' ? 'destructive' : 'secondary'} className="w-full justify-center py-2 text-sm">{(ticket.priority || 'medium').toUpperCase()}</Badge>
                  </div>
                  <div className="p-4 bg-slate-50 rounded-xl border border-slate-100">
                    <p className="text-[10px] font-bold text-slate-400 uppercase mb-2">Category Segment</p>
@@ -159,7 +181,7 @@ export function TicketDetails() {
               <Separator className="opacity-50" />
               <div className="flex items-center gap-4">
                 <div className="h-10 w-10 rounded-full bg-slate-50 flex items-center justify-center text-slate-400"><Calendar className="size-5" /></div>
-                <div><p className="text-[10px] font-bold text-slate-400 uppercase">First Contact</p><p className="font-bold text-slate-900">{format(new Date(ticket.createdAt), 'MMM d, p')}</p></div>
+                <div><p className="text-[10px] font-bold text-slate-400 uppercase">First Contact</p><p className="font-bold text-slate-900">{ticket.createdAt ? format(new Date(ticket.createdAt), 'MMM d, p') : 'N/A'}</p></div>
               </div>
             </CardContent>
           </Card>

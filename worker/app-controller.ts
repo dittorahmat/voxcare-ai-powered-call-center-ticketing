@@ -14,7 +14,6 @@ export class AppController extends DurableObject<Env> {
       const storedTickets = await this.ctx.storage.get<Record<string, Ticket>>('tickets') || {};
       this.sessions = new Map(Object.entries(storedSessions));
       this.tickets = new Map(Object.entries(storedTickets));
-      // Initialize with mock data if empty
       if (this.tickets.size === 0) {
         const mockTickets: Ticket[] = [
           {
@@ -41,7 +40,6 @@ export class AppController extends DurableObject<Env> {
   private async persistTickets(): Promise<void> {
     await this.ctx.storage.put('tickets', Object.fromEntries(this.tickets));
   }
-  // Session Methods
   async addSession(sessionId: string, title?: string): Promise<void> {
     await this.ensureLoaded();
     const now = Date.now();
@@ -52,6 +50,14 @@ export class AppController extends DurableObject<Env> {
       lastActive: now
     });
     await this.persistSessions();
+  }
+  async updateSessionActivity(sessionId: string): Promise<void> {
+    await this.ensureLoaded();
+    const session = this.sessions.get(sessionId);
+    if (session) {
+      session.lastActive = Date.now();
+      await this.persistSessions();
+    }
   }
   async removeSession(sessionId: string): Promise<boolean> {
     await this.ensureLoaded();
@@ -73,10 +79,9 @@ export class AppController extends DurableObject<Env> {
     }
     return false;
   }
-  // Ticket Methods
   async listTickets(): Promise<Ticket[]> {
     await this.ensureLoaded();
-    return Array.from(this.tickets.values()).sort((a, b) => 
+    return Array.from(this.tickets.values()).sort((a, b) =>
       new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
     );
   }
@@ -103,9 +108,5 @@ export class AppController extends DurableObject<Env> {
   async getTicket(id: string): Promise<Ticket | null> {
     await this.ensureLoaded();
     return this.tickets.get(id) || null;
-  }
-  async getSessionCount(): Promise<number> {
-    await this.ensureLoaded();
-    return this.sessions.size;
   }
 }

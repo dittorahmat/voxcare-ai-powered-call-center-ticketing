@@ -2,11 +2,12 @@ import React, { useMemo } from 'react';
 import { useTicketStore } from '@/store/ticketStore';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Inbox, CheckCircle2, Clock, Activity, ArrowUpRight, PhoneCall } from 'lucide-react';
+import { Inbox, CheckCircle2, Clock, Activity, ArrowUpRight, PhoneCall, Plus } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { Link } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
+import { CreateTicketDialog } from '@/components/tickets/CreateTicketDialog';
 export function Dashboard() {
   const tickets = useTicketStore(s => s.tickets);
   const isLoading = useTicketStore(s => s.isLoading);
@@ -19,7 +20,9 @@ export function Dashboard() {
   const priorityData = useMemo(() => {
     if (tickets.length === 0) return [];
     const counts = { low: 0, medium: 0, high: 0, urgent: 0 };
-    tickets.forEach(t => counts[t.priority]++);
+    tickets.forEach(t => {
+      if (counts[t.priority] !== undefined) counts[t.priority]++;
+    });
     return Object.entries(counts).map(([name, value]) => ({ name, value }));
   }, [tickets]);
   const COLORS = ['#94a3b8', '#fbbf24', '#f87171', '#ef4444'];
@@ -31,9 +34,18 @@ export function Dashboard() {
   }
   return (
     <div className="space-y-8 animate-fade-in max-w-7xl mx-auto">
-      <div className="flex flex-col gap-1">
-        <h1 className="text-3xl font-bold tracking-tight">Agent Dashboard</h1>
-        <p className="text-muted-foreground">Welcome back, Jane. Here's your real-time performance overview.</p>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="flex flex-col gap-1">
+          <h1 className="text-3xl font-bold tracking-tight">Agent Dashboard</h1>
+          <p className="text-muted-foreground">Welcome back, Jane. Here's your real-time performance overview.</p>
+        </div>
+        <CreateTicketDialog 
+          trigger={
+            <Button variant="outline" className="h-10 border-indigo-200 text-indigo-600 hover:bg-indigo-50">
+              <Plus className="mr-2 size-4" /> New Manual Ticket
+            </Button>
+          }
+        />
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
         {stats.map((stat) => (
@@ -61,16 +73,26 @@ export function Dashboard() {
             </div>
           </CardHeader>
           <CardContent className="p-6">
-            <div className="w-full h-[350px]">
+            <div className="w-full h-[350px] min-h-[300px]">
               {priorityData.length === 0 ? (
                 <div className="flex items-center justify-center h-full">
-                  <span className="text-muted-foreground text-sm">No data</span>
+                  <span className="text-muted-foreground text-sm">No data available</span>
                 </div>
               ) : (
-                <ResponsiveContainer width="100%" minHeight={300} aspect={1.25}>
+                <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
-                    <Pie data={priorityData} cx="50%" cy="50%" innerRadius={60} outerRadius={80} paddingAngle={5} dataKey="value">
-                      {priorityData.map((entry, index) => <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />)}
+                    <Pie 
+                      data={priorityData} 
+                      cx="50%" 
+                      cy="50%" 
+                      innerRadius={80} 
+                      outerRadius={120} 
+                      paddingAngle={5} 
+                      dataKey="value"
+                    >
+                      {priorityData.map((_, index) => (
+                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                      ))}
                     </Pie>
                     <Tooltip />
                   </PieChart>
@@ -105,40 +127,42 @@ export function Dashboard() {
         </Card>
       </div>
       <Card className="border-none shadow-sm bg-white overflow-hidden">
-          <CardHeader className="flex flex-row items-center justify-between border-b border-slate-50 px-6 py-5">
-            <div>
-              <CardTitle className="text-lg">Recent Tickets</CardTitle>
-              <CardDescription>Real-time updates from the field.</CardDescription>
-            </div>
-            <Button variant="ghost" size="sm" asChild className="text-indigo-600 font-semibold">
-              <Link to="/tickets">View All</Link>
-            </Button>
-          </CardHeader>
-          <CardContent className="p-0">
-            <div className="divide-y divide-slate-50">
-              {recentTickets.map((ticket) => (
-                <div key={ticket.id} className="p-4 px-6 hover:bg-slate-50/50 transition-colors flex items-center justify-between group">
-                  <div className="flex flex-col gap-1">
-                    <span className="text-[10px] font-mono text-slate-400">{ticket.id}</span>
-                    <p className="font-semibold text-slate-900 group-hover:text-indigo-600 transition-colors">{ticket.title}</p>
-                    <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                      <span>{ticket.customerName}</span>
-                      <span className="h-1 w-1 rounded-full bg-slate-300" />
-                      <span>{ticket.createdAt ? formatDistanceToNow(new Date(ticket.createdAt)) : 'Unknown'} ago</span>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-4">
-                    <Badge variant={ticket.priority === 'urgent' ? 'destructive' : 'secondary'} className="capitalize text-[10px]">
-                      {ticket.priority}
-                    </Badge>
-                    <Link to={`/tickets/${ticket.id}`} className="p-2 rounded-full bg-slate-100 text-slate-400 opacity-0 group-hover:opacity-100 transition-all">
-                      <ArrowUpRight className="size-4" />
-                    </Link>
+        <CardHeader className="flex flex-row items-center justify-between border-b border-slate-50 px-6 py-5">
+          <div>
+            <CardTitle className="text-lg">Recent Tickets</CardTitle>
+            <CardDescription>Real-time updates from the field.</CardDescription>
+          </div>
+          <Button variant="ghost" size="sm" asChild className="text-indigo-600 font-semibold">
+            <Link to="/tickets">View All</Link>
+          </Button>
+        </CardHeader>
+        <CardContent className="p-0">
+          <div className="divide-y divide-slate-50">
+            {recentTickets.length > 0 ? recentTickets.map((ticket) => (
+              <div key={ticket.id} className="p-4 px-6 hover:bg-slate-50/50 transition-colors flex items-center justify-between group">
+                <div className="flex flex-col gap-1">
+                  <span className="text-[10px] font-mono text-slate-400">{ticket.id}</span>
+                  <p className="font-semibold text-slate-900 group-hover:text-indigo-600 transition-colors">{ticket.title}</p>
+                  <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                    <span>{ticket.customerName}</span>
+                    <span className="h-1 w-1 rounded-full bg-slate-300" />
+                    <span>{ticket.createdAt ? formatDistanceToNow(new Date(ticket.createdAt)) : 'Unknown'} ago</span>
                   </div>
                 </div>
-              ))}
-            </div>
-          </CardContent>
+                <div className="flex items-center gap-4">
+                  <Badge variant={ticket.priority === 'urgent' ? 'destructive' : 'secondary'} className="capitalize text-[10px]">
+                    {ticket.priority}
+                  </Badge>
+                  <Link to={`/tickets/${ticket.id}`} className="p-2 rounded-full bg-slate-100 text-slate-400 opacity-0 group-hover:opacity-100 transition-all">
+                    <ArrowUpRight className="size-4" />
+                  </Link>
+                </div>
+              </div>
+            )) : (
+              <div className="p-8 text-center text-muted-foreground text-sm">No tickets found.</div>
+            )}
+          </div>
+        </CardContent>
       </Card>
     </div>
   );

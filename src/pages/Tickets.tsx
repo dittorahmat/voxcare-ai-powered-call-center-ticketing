@@ -5,10 +5,11 @@ import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Search, Filter, Inbox, ExternalLink, ArrowUpDown } from 'lucide-react';
+import { Search, Filter, Inbox, ExternalLink, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { format } from 'date-fns';
+import { CreateTicketDialog } from '@/components/tickets/CreateTicketDialog';
 export function Tickets() {
   const tickets = useTicketStore(s => s.tickets);
   const isLoading = useTicketStore(s => s.isLoading);
@@ -36,9 +37,13 @@ export function Tickets() {
           <p className="text-muted-foreground">Unified view of all customer interactions.</p>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" className="h-10 px-4">
-            <Filter className="size-4 mr-2" /> Status: All
-          </Button>
+          <CreateTicketDialog 
+            trigger={
+              <Button variant="outline" className="h-10">
+                <Plus className="size-4 mr-2" /> Manual Ticket
+              </Button>
+            }
+          />
           <Button className="bg-indigo-600 hover:bg-indigo-700 h-10 shadow-lg shadow-indigo-100" asChild>
             <Link to="/live-call">New Live Intake</Link>
           </Button>
@@ -101,7 +106,7 @@ export function Tickets() {
                         </Badge>
                       </td>
                       <td className="px-6 py-4 text-xs text-muted-foreground font-medium">
-                        {format(new Date(ticket.createdAt), 'MMM d, yyyy')}
+                        {ticket.createdAt ? format(new Date(ticket.createdAt), 'MMM d, yyyy') : 'N/A'}
                       </td>
                       <td className="px-6 py-4 text-right">
                         <Button variant="ghost" size="icon" asChild className="text-slate-300 hover:text-indigo-600 hover:bg-indigo-50 rounded-full">

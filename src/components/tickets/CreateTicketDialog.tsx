@@ -89,9 +89,8 @@ export function CreateTicketDialog({ trigger }: CreateTicketDialogProps) {
             Manually log a customer request when voice intake is not used.
           </DialogDescription>
         </DialogHeader>
-        {open && (
-          <Form {...form}>
-            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 py-4">
+        <Form {...form}>
+          <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 py-4">
             <FormField
               control={form.control}
               name="customerName"
@@ -112,7 +111,7 @@ export function CreateTicketDialog({ trigger }: CreateTicketDialogProps) {
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>Category</FormLabel>
-                    <Select onValueChange={field.onChange} value={field.value}>
+                    <Select onValueChange={field.onChange} defaultValue={field.value}>
                       <FormControl>
                         <SelectTrigger>
                           <SelectValue placeholder="Select category" />
@@ -134,7 +133,7 @@ export function CreateTicketDialog({ trigger }: CreateTicketDialogProps) {
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>Priority</FormLabel>
-                    <Select onValueChange={field.onChange} value={field.value}>
+                    <Select onValueChange={field.onChange} defaultValue={field.value}>
                       <FormControl>
                         <SelectTrigger>
                           <SelectValue placeholder="Select priority" />
@@ -188,8 +187,7 @@ export function CreateTicketDialog({ trigger }: CreateTicketDialogProps) {
               </Button>
             </DialogFooter>
           </form>
-          </Form>
-        )}
+        </Form>
       </DialogContent>
     </Dialog>
   );
