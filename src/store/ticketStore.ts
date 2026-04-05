@@ -1,69 +1,86 @@
 import { create } from 'zustand';
-import type { Ticket, TicketPriority, TicketStatus } from '../../worker/types';
+import { persist } from 'zustand/middleware';
+export type TicketPriority = 'low' | 'medium' | 'high' | 'urgent';
+export type TicketStatus = 'open' | 'in-progress' | 'resolved' | 'closed';
+export interface Ticket {
+  id: string;
+  title: string;
+  description: string;
+  customerName: string;
+  priority: TicketPriority;
+  status: TicketStatus;
+  category: string;
+  createdAt: string;
+  transcript?: string;
+}
 interface TicketState {
   tickets: Ticket[];
-  isLoading: boolean;
-  error: string | null;
-  initialize: () => Promise<void>;
-  addTicket: (ticket: Ticket) => Promise<void>;
-  updateTicketStatus: (id: string, status: TicketStatus) => Promise<void>;
-  updateTicket: (id: string, updates: Partial<Ticket>) => Promise<void>;
+  addTicket: (ticket: Ticket) => void;
+  updateTicketStatus: (id: string, status: TicketStatus) => void;
 }
-export const useTicketStore = create<TicketState>((set, get) => ({
-  tickets: [],
-  isLoading: true,
-  error: null,
-  initialize: async () => {
-    set({ error: null });
-    try {
-      const res = await fetch('/api/tickets');
-      const json = await res.json();
-      if (json.success) {
-        set({ tickets: json.data, isLoading: false, error: null });
-      } else {
-        throw new Error(json.error);
-      }
-    } catch (err: any) {
-      set({ error: err.message, isLoading: false });
-    }
+const MOCK_TICKETS: Ticket[] = [
+  {
+    id: 'T-1001',
+    title: 'Internet Connection Dropping',
+    description: 'Customer reporting intermittent connectivity issues in the North region.',
+    customerName: 'Sarah Jenkins',
+    priority: 'high',
+    status: 'open',
+    category: 'Technical Support',
+    createdAt: new Date(Date.now() - 3600000).toISOString(),
   },
-  addTicket: async (ticket) => {
-    const prevState = get();
-    set({ tickets: [ticket, ...prevState.tickets] }); // Optimistic
-    try {
-      await fetch('/api/tickets', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(ticket)
-      });
-    } catch (err) {
-      set(prevState); // Rollback
-    }
+  {
+    id: 'T-1002',
+    title: 'Billing Discrepancy - April',
+    description: 'Overcharged by $15 on the latest monthly subscription invoice.',
+    customerName: 'Michael Chen',
+    priority: 'medium',
+    status: 'in-progress',
+    category: 'Billing',
+    createdAt: new Date(Date.now() - 7200000).toISOString(),
   },
-  updateTicketStatus: async (id, status) => {
-    const prevState = get();
-    set({ tickets: prevState.tickets.map(t => t.id === id ? { ...t, status } : t) });
-    try {
-      await fetch(`/api/tickets/${id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status })
-      });
-    } catch (err) {
-      set(prevState);
-    }
+  {
+    id: 'T-1003',
+    title: 'Feature Request: Dark Mode',
+    description: 'User suggests adding a native dark mode to the mobile application.',
+    customerName: 'Alex Rivera',
+    priority: 'low',
+    status: 'open',
+    category: 'Feedback',
+    createdAt: new Date(Date.now() - 86400000).toISOString(),
   },
-  updateTicket: async (id, updates) => {
-    const prevState = get();
-    set({ tickets: prevState.tickets.map(t => t.id === id ? { ...t, ...updates } : t) });
-    try {
-      await fetch(`/api/tickets/${id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updates)
-      });
-    } catch (err) {
-      set(prevState);
-    }
+  {
+    id: 'T-1004',
+    title: 'Account Locked - 3 Attempts',
+    description: 'User locked out after multiple failed password attempts.',
+    customerName: 'Emma Wilson',
+    priority: 'urgent',
+    status: 'resolved',
+    category: 'Security',
+    createdAt: new Date(Date.now() - 120000).toISOString(),
   },
-}));
+  {
+    id: 'T-1005',
+    title: 'New Service Installation',
+    description: 'Scheduled fiber optic installation for new residential customer.',
+    customerName: 'David Miller',
+    priority: 'medium',
+    status: 'in-progress',
+    category: 'Service',
+    createdAt: new Date(Date.now() - 18000000).toISOString(),
+  }
+];
+export const useTicketStore = create<TicketState>()(
+  persist(
+    (set) => ({
+      tickets: MOCK_TICKETS,
+      addTicket: (ticket) => set((state) => ({ 
+        tickets: [ticket, ...state.tickets] 
+      })),
+      updateTicketStatus: (id, status) => set((state) => ({
+        tickets: state.tickets.map(t => t.id === id ? { ...t, status } : t)
+      })),
+    }),
+    { name: 'voxcare-tickets' }
+  )
+);
