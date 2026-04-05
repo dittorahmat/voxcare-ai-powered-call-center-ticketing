@@ -1,6 +1,6 @@
 # Cloudflare Workers AI Chat Application
 
-[cloudflarebutton]
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/dittorahmat/voxcare-ai-powered-call-center-ticketing)
 
 A production-ready, full-stack AI chat application built on Cloudflare Workers. Features durable multi-session conversations powered by Cloudflare Agents, streaming responses, tool calling (weather, web search), model switching (Gemini models), and a modern React UI with Shadcn/UI components.
 
@@ -122,7 +122,7 @@ Frontend integrates via `src/lib/chat.ts` service.
 
 3. Bind custom domain or use `*.workers.dev`.
 
-[cloudflarebutton]
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/dittorahmat/voxcare-ai-powered-call-center-ticketing)
 
 ### Production Tips
 
