@@ -73,21 +73,21 @@ export function Dashboard() {
             </div>
           </CardHeader>
           <CardContent className="p-6">
-            <div className="w-full h-[350px] min-h-[300px]">
+            <div className="w-full h-[400px]">
               {priorityData.length === 0 ? (
                 <div className="flex items-center justify-center h-full">
                   <span className="text-muted-foreground text-sm">No data available</span>
                 </div>
               ) : (
-                <ResponsiveContainer width="100%" height="100%">
+                <ResponsiveContainer width="100%" aspect={0.75} minHeight={300}>
                   <PieChart>
-                    <Pie 
-                      data={priorityData} 
-                      cx="50%" 
-                      cy="50%" 
-                      innerRadius={80} 
-                      outerRadius={120} 
-                      paddingAngle={5} 
+                    <Pie
+                      data={priorityData}
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={80}
+                      outerRadius={120}
+                      paddingAngle={5}
                       dataKey="value"
                     >
                       {priorityData.map((_, index) => (
