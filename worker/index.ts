@@ -9,7 +9,8 @@ import { ChatAgent } from "./agent";
 import { AppController } from "./app-controller";
 import { AuthController } from "./auth-controller";
 import { RateLimiter } from "./rate-limiter";
-export { ChatAgent, AppController, AuthController, RateLimiter };
+import { LiveChatController } from "./live-chat-controller";
+export { ChatAgent, AppController, AuthController, RateLimiter, LiveChatController };
 export interface ClientErrorReport {
   message: string;
   url: string;

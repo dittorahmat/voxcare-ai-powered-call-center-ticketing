@@ -15,7 +15,7 @@ export type TicketPriority = 'low' | 'medium' | 'high' | 'urgent';
 export type TicketStatus = 'open' | 'in-progress' | 'resolved' | 'reopened' | 'closed' | 'merged';
 
 // ─── User & Auth ───────────────────────────────────────────────
-export type UserRole = 'agent' | 'supervisor' | 'admin';
+export type UserRole = 'agent' | 'supervisor' | 'admin' | 'customer';
 
 export interface User {
   id: string;
@@ -153,6 +153,14 @@ export interface Customer {
   createdAt: string;
   updatedAt: string;
   ticketCount: number;
+  // Auth fields
+  passwordHash: string | null;
+  passwordSalt: string | null;
+  isActive: boolean;
+  lastLoginAt: string | null;
+  emailVerifiedAt: string | null;
+  verificationToken: string | null;
+  verificationTokenExpiry: number | null;
 }
 
 export interface AuditEntry {
@@ -405,4 +413,36 @@ export interface EmailTemplate {
   htmlBody: string;
   textBody: string;
   updatedAt: string;
+}
+
+// ─── Live Chat ─────────────────────────────────────────────────
+export type ChatState = 'collecting' | 'waiting' | 'active' | 'closed';
+export type ChatSender = 'customer' | 'agent' | 'system' | 'ai';
+
+export interface ChatMessage {
+  id: string;
+  chatId: string;
+  sender: ChatSender;
+  text: string;
+  attachments: { key: string; filename: string; contentType: string; size: number }[];
+  timestamp: string;
+  read: boolean;
+}
+
+export interface ChatSession {
+  id: string;
+  customerId: string | null; // null for anonymous widget users
+  customerName: string;
+  customerEmail: string | null;
+  agentId: string | null;
+  state: ChatState;
+  aiSummary: string | null;
+  suggestedCategory: string | null;
+  suggestedPriority: string | null;
+  transcript: ChatMessage[];
+  typingIndicator: { customer: boolean; agent: boolean };
+  createdAt: string;
+  closedAt: string | null;
+  ticketId: string | null;
+  maxConcurrentChats: number;
 }

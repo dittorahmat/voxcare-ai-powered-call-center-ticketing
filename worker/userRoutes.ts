@@ -5,6 +5,8 @@ import { AuthController } from './auth-controller';
 import { API_RESPONSES } from './config';
 import { validatePassword } from './password';
 import { Env, getAppController, getAuthController, registerSession, unregisterSession } from "./core-utils";
+import { CustomerAuthController } from "./customer-auth-controller";
+import { processChatMessage } from "./chat-bot";
 import { authMiddleware, requireRole, getUser } from "./auth";
 import { paginate, parsePaginationParams } from "./pagination";
 import { captureIp, rateLimit } from "./middleware";
@@ -1848,5 +1850,741 @@ export function userRoutes(app: Hono<{ Bindings: Env }>) {
             csatSubmitted: !!(await controller.getCSATResponse(ticket.id)),
         };
         return c.json({ success: true, data: publicData });
+    });
+
+    // ─── Customer Authentication ─────────────────────────────
+    // Note: CustomerAuthController is used as a helper class.
+    // Storage goes through AppController DO.
+
+    app.post('/api/customer/auth/register', async (c) => {
+        const { name, email, password, phone, company } = await c.req.json();
+        if (!name || !email || !password) return c.json({ success: false, error: 'Name, email, and password required' }, { status: 400 });
+
+        const controller = getAppController(c.env);
+        const customers = await controller.listCustomers();
+        const existing = customers.find(cust => cust.email === email);
+        if (existing) return c.json({ success: false, error: 'Email already registered' }, { status: 409 });
+
+        // Validate password
+        const pwCheck = validatePassword(password);
+        if (!pwCheck.valid) return c.json({ success: false, error: pwCheck.errors.join(', ') }, { status: 400 });
+
+        const { hash, salt } = await (async () => {
+            const encoder = new TextEncoder();
+            const saltBytes = crypto.getRandomValues(new Uint8Array(16));
+            const keyMaterial = await crypto.subtle.importKey('raw', encoder.encode(password), 'PBKDF2', false, ['deriveBits']);
+            const derivedBits = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt: saltBytes, iterations: 100_000, hash: 'SHA-256' }, keyMaterial, 256);
+            return {
+                hash: btoa(String.fromCharCode(...new Uint8Array(derivedBits))),
+                salt: btoa(String.fromCharCode(...saltBytes)),
+            };
+        })();
+
+        const verificationToken = crypto.randomUUID();
+        const customer = {
+            id: `cust-${crypto.randomUUID()}`,
+            name, email: email.toLowerCase(), phone: phone || null, company: company || null,
+            tags: [], isVip: false, notes: null,
+            createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), ticketCount: 0,
+            passwordHash: hash, passwordSalt: salt, isActive: false,
+            lastLoginAt: null, emailVerifiedAt: null,
+            verificationToken, verificationTokenExpiry: Date.now() + 24 * 60 * 60 * 1000,
+        };
+        await controller.addCustomer(customer as any);
+
+        // Send verification email
+        const appUrl = c.env?.APP_URL || 'http://localhost:5173';
+        const verifyUrl = `${appUrl}/customer/verify/${verificationToken}`;
+        const { sendEmail } = await import('./email-service');
+        await sendEmail({
+            to: email,
+            subject: 'Verify your VoxCare account',
+            html: `<h2>Welcome to VoxCare!</h2><p>Click <a href="${verifyUrl}">here</a> to verify your email.</p>`,
+            text: `Verify your email: ${verifyUrl}`,
+        }, c.env);
+
+        return c.json({ success: true, data: { customerId: customer.id, message: 'Please check your email to verify your account' } });
+    });
+
+    app.post('/api/customer/auth/login', async (c) => {
+        const { email, password } = await c.req.json();
+        if (!email || !password) return c.json({ success: false, error: 'Email and password required' }, { status: 400 });
+
+        const controller = getAppController(c.env);
+        const customers = await controller.listCustomers();
+        const customer = customers.find(cust => cust.email === email.toLowerCase());
+        if (!customer || !customer.passwordHash || !customer.passwordSalt) {
+            return c.json({ success: false, error: 'Invalid credentials' }, { status: 401 });
+        }
+
+        // Verify password
+        const encoder = new TextEncoder();
+        const saltBytes = Uint8Array.from(atob(customer.passwordSalt), ch => ch.charCodeAt(0));
+        const keyMaterial = await crypto.subtle.importKey('raw', encoder.encode(password), 'PBKDF2', false, ['deriveBits']);
+        const derivedBits = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt: saltBytes, iterations: 100_000, hash: 'SHA-256' }, keyMaterial, 256);
+        const computedHash = btoa(String.fromCharCode(...new Uint8Array(derivedBits)));
+        if (computedHash !== customer.passwordHash) {
+            return c.json({ success: false, error: 'Invalid credentials' }, { status: 401 });
+        }
+
+        if (!customer.isActive) {
+            return c.json({ success: false, error: 'Please verify your email first', code: 'email_not_verified' }, { status: 403 });
+        }
+
+        // Update last login
+        await controller.updateCustomer(customer.id, { lastLoginAt: new Date().toISOString() } as any);
+
+        // Generate JWT (24h expiry)
+        const secret = new TextEncoder().encode(c.env?.JWT_SECRET || 'dev-secret-change-me');
+        const jwt = await new (await import('jose')).SignJWT({ sub: customer.id, role: 'customer', name: customer.name })
+            .setProtectedHeader({ alg: 'HS256' }).setIssuedAt().setExpirationTime('24h').sign(secret);
+
+        // Generate refresh token
+        const refreshToken = crypto.getRandomValues(new Uint8Array(32)).reduce((s, b) => s + b.toString(16).padStart(2, '0'), '');
+        // Store session in AppController
+        await controller.addCustomerSession({
+            userId: customer.id, refreshToken, refreshTokenExpiry: Date.now() + 7 * 24 * 60 * 60 * 1000,
+            createdAt: Date.now(), revoked: false,
+        } as any);
+
+        return c.json({ success: true, data: { accessToken: jwt, refreshToken, customer: { id: customer.id, name: customer.name, email: customer.email } } });
+    });
+
+    app.post('/api/customer/auth/refresh', async (c) => {
+        const { refreshToken } = await c.req.json();
+        if (!refreshToken) return c.json({ success: false, error: 'Refresh token required' }, { status: 400 });
+
+        const controller = getAppController(c.env);
+        const session = await controller.getCustomerSession(refreshToken);
+        if (!session || (session as any).revoked || Date.now() > (session as any).refreshTokenExpiry) {
+            return c.json({ success: false, error: 'Invalid refresh token' }, { status: 401 });
+        }
+
+        const customer = await controller.getCustomer((session as any).userId);
+        if (!customer || !customer.isActive) return c.json({ success: false, error: 'Customer not found or inactive' }, { status: 401 });
+
+        const secret = new TextEncoder().encode(c.env?.JWT_SECRET || 'dev-secret-change-me');
+        const jwt = await new (await import('jose')).SignJWT({ sub: customer.id, role: 'customer', name: customer.name })
+            .setProtectedHeader({ alg: 'HS256' }).setIssuedAt().setExpirationTime('24h').sign(secret);
+
+        return c.json({ success: true, data: { accessToken: jwt } });
+    });
+
+    app.post('/api/customer/auth/logout', async (c) => {
+        const { refreshToken } = await c.req.json();
+        if (!refreshToken) return c.json({ success: false, error: 'Refresh token required' }, { status: 400 });
+
+        const controller = getAppController(c.env);
+        await controller.revokeCustomerSession(refreshToken);
+        return c.json({ success: true, data: { message: 'Logged out' } });
+    });
+
+    app.get('/api/customer/verify/:token', async (c) => {
+        const token = c.req.param('token');
+        const controller = getAppController(c.env);
+        const customers = await controller.listCustomers();
+        const customer = customers.find(cust => cust.verificationToken === token);
+
+        if (!customer) return c.html('<h1>Invalid verification link</h1><p>This token is not valid.</p>', 404);
+        if (Date.now() > (customer.verificationTokenExpiry || 0)) {
+            return c.html(`<h1>Verification link expired</h1><p>Please <a href="/customer/login">login</a> to resend verification.</p>`, 400);
+        }
+
+        await controller.updateCustomer(customer.id, {
+            isActive: true, emailVerifiedAt: new Date().toISOString(),
+            verificationToken: null, verificationTokenExpiry: null,
+        } as any);
+
+        const appUrl = c.env?.APP_URL || 'http://localhost:5173';
+        return c.redirect(`${appUrl}/customer/login?verified=1`);
+    });
+
+    app.post('/api/customer/auth/resend-verification', async (c) => {
+        const { email } = await c.req.json();
+        if (!email) return c.json({ success: false, error: 'Email required' }, { status: 400 });
+
+        const controller = getAppController(c.env);
+        const customers = await controller.listCustomers();
+        const customer = customers.find(cust => cust.email === email.toLowerCase());
+        if (!customer) return c.json({ success: true, data: { message: 'If the email exists, a new verification link has been sent' } });
+        if (customer.emailVerifiedAt) return c.json({ success: false, error: 'Email already verified' }, { status: 400 });
+
+        const verificationToken = crypto.randomUUID();
+        await controller.updateCustomer(customer.id, {
+            verificationToken, verificationTokenExpiry: Date.now() + 24 * 60 * 60 * 1000,
+        } as any);
+
+        const appUrl = c.env?.APP_URL || 'http://localhost:5173';
+        const { sendEmail } = await import('./email-service');
+        await sendEmail({
+            to: customer.email!,
+            subject: 'Verify your VoxCare account',
+            html: `<h2>Welcome to VoxCare!</h2><p>Click <a href="${appUrl}/customer/verify/${verificationToken}">here</a> to verify your email.</p>`,
+            text: `Verify your email: ${appUrl}/customer/verify/${verificationToken}`,
+        }, c.env);
+
+        return c.json({ success: true, data: { message: 'Verification email sent' } });
+    });
+
+    app.post('/api/customer/auth/forgot-password', async (c) => {
+        const { email } = await c.req.json();
+        if (!email) return c.json({ success: false, error: 'Email required' }, { status: 400 });
+
+        const controller = getAppController(c.env);
+        const customers = await controller.listCustomers();
+        const customer = customers.find(cust => cust.email === email.toLowerCase());
+
+        if (customer && customer.isActive) {
+            const resetToken = crypto.randomUUID();
+            await controller.addPasswordReset({ token: resetToken, userId: customer.id, expiresAt: Date.now() + 60 * 60 * 1000, createdAt: new Date().toISOString() });
+
+            const appUrl = c.env?.APP_URL || 'http://localhost:5173';
+            const { sendEmail } = await import('./email-service');
+            await sendEmail({
+                to: customer.email!,
+                subject: 'Reset your VoxCare password',
+                html: `<h2>Reset Password</h2><p>Click <a href="${appUrl}/customer/reset-password/${resetToken}">here</a> to reset your password. This link expires in 1 hour.</p>`,
+                text: `Reset password: ${appUrl}/customer/reset-password/${resetToken}`,
+            }, c.env);
+        }
+
+        // Always return success (don't leak whether email exists)
+        return c.json({ success: true, data: { message: 'If the email exists, a reset link has been sent' } });
+    });
+
+    app.post('/api/customer/auth/reset-password', async (c) => {
+        const { token, password } = await c.req.json();
+        if (!token || !password) return c.json({ success: false, error: 'Token and password required' }, { status: 400 });
+
+        const pwCheck = validatePassword(password);
+        if (!pwCheck.valid) return c.json({ success: false, error: pwCheck.errors.join(', ') }, { status: 400 });
+
+        const controller = getAppController(c.env);
+        const reset = await controller.getPasswordReset(token);
+        if (!reset) return c.json({ success: false, error: 'Invalid reset token' }, { status: 400 });
+
+        const { hash, salt } = await (async () => {
+            const encoder = new TextEncoder();
+            const saltBytes = crypto.getRandomValues(new Uint8Array(16));
+            const keyMaterial = await crypto.subtle.importKey('raw', encoder.encode(password), 'PBKDF2', false, ['deriveBits']);
+            const derivedBits = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt: saltBytes, iterations: 100_000, hash: 'SHA-256' }, keyMaterial, 256);
+            return { hash: btoa(String.fromCharCode(...new Uint8Array(derivedBits))), salt: btoa(String.fromCharCode(...saltBytes)) };
+        })();
+
+        await controller.updateCustomer(reset.userId, { passwordHash: hash, passwordSalt: salt } as any);
+        await controller.deletePasswordReset(token);
+
+        return c.json({ success: true, data: { message: 'Password updated' } });
+    });
+
+    app.patch('/api/customer/password', authMiddleware(), async (c) => {
+        const user = getUser(c);
+        const { currentPassword, newPassword } = await c.req.json();
+        if (!currentPassword || !newPassword) return c.json({ success: false, error: 'Current and new password required' }, { status: 400 });
+
+        const pwCheck = validatePassword(newPassword);
+        if (!pwCheck.valid) return c.json({ success: false, error: pwCheck.errors.join(', ') }, { status: 400 });
+
+        const controller = getAppController(c.env);
+        const customer = await controller.getCustomer(user.sub);
+        if (!customer || !customer.passwordHash || !customer.passwordSalt) return c.json({ success: false, error: 'Customer not found' }, { status: 404 });
+
+        // Verify current password
+        const encoder = new TextEncoder();
+        const saltBytes = Uint8Array.from(atob(customer.passwordSalt), ch => ch.charCodeAt(0));
+        const keyMaterial = await crypto.subtle.importKey('raw', encoder.encode(currentPassword), 'PBKDF2', false, ['deriveBits']);
+        const derivedBits = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt: saltBytes, iterations: 100_000, hash: 'SHA-256' }, keyMaterial, 256);
+        if (btoa(String.fromCharCode(...new Uint8Array(derivedBits))) !== customer.passwordHash) {
+            return c.json({ success: false, error: 'Current password is incorrect' }, { status: 401 });
+        }
+
+        const { hash, salt } = await (async () => {
+            const saltBytes = crypto.getRandomValues(new Uint8Array(16));
+            const km = await crypto.subtle.importKey('raw', encoder.encode(newPassword), 'PBKDF2', false, ['deriveBits']);
+            const db = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt: saltBytes, iterations: 100_000, hash: 'SHA-256' }, km, 256);
+            return { hash: btoa(String.fromCharCode(...new Uint8Array(db))), salt: btoa(String.fromCharCode(...saltBytes)) };
+        })();
+
+        await controller.updateCustomer(user.sub, { passwordHash: hash, passwordSalt: salt } as any);
+        return c.json({ success: true, data: { message: 'Password updated' } });
+    });
+
+    // ─── Customer Portal API ─────────────────────────────────
+
+    // Customer auth middleware helper
+    const requireCustomer = async (c: any) => {
+        const user = getUser(c);
+        if (user.role !== 'customer') return c.json({ success: false, error: 'Forbidden' }, { status: 403 });
+        return user;
+    };
+
+    app.get('/api/customer/tickets', authMiddleware(), async (c) => {
+        const user = getUser(c);
+        if (user.role !== 'customer') return c.json({ success: false, error: 'Forbidden' }, { status: 403 });
+
+        const controller = getAppController(c.env);
+        const allTickets = await controller.listTickets();
+        const myTickets = allTickets.filter(t => t.customerId === user.sub);
+        // Simple pagination
+        const page = parseInt(c.req.query('page') || '1');
+        const limit = parseInt(c.req.query('limit') || '20');
+        const start = (page - 1) * limit;
+        const paginated = myTickets.slice(start, start + limit);
+        return c.json({ success: true, data: paginated, pagination: { total: myTickets.length, page, limit, totalPages: Math.ceil(myTickets.length / limit) || 1 } });
+    });
+
+    app.get('/api/customer/tickets/:id', authMiddleware(), async (c) => {
+        const user = getUser(c);
+        if (user.role !== 'customer') return c.json({ success: false, error: 'Forbidden' }, { status: 403 });
+
+        const controller = getAppController(c.env);
+        const ticket = await controller.getTicket(c.req.param('id'));
+        if (!ticket) return c.json({ success: false, error: 'Ticket not found' }, { status: 404 });
+        if (ticket.customerId !== user.sub) return c.json({ success: false, error: 'Forbidden' }, { status: 403 });
+
+        // Exclude internal notes
+        const publicTicket = {
+            ...ticket,
+            internalNotes: [],
+        };
+        return c.json({ success: true, data: publicTicket });
+    });
+
+    app.post('/api/customer/tickets', authMiddleware(), async (c) => {
+        const user = getUser(c);
+        if (user.role !== 'customer') return c.json({ success: false, error: 'Forbidden' }, { status: 403 });
+
+        const ticket = await c.req.json();
+        const controller = getAppController(c.env);
+        const customer = await controller.getCustomer(user.sub);
+
+        const ticketWithMeta = {
+            ...ticket,
+            id: ticket.id || `T-${Date.now()}`,
+            customerId: user.sub,
+            customerName: customer?.name || 'Customer',
+            status: 'open',
+            assignedTo: null,
+            slaRecordId: null,
+            escalationLevel: 0,
+            resolutionTime: null,
+            resolvedAt: null,
+            resolvedBy: null,
+            internalNotes: [],
+            publicNotes: null,
+            attachments: [],
+            tags: ticket.tags || [],
+            publicToken: crypto.randomUUID(),
+            mergedInto: null,
+            fcrFlag: false,
+            handleTimeSeconds: null,
+            updatedAt: null,
+            lastCustomerReplyAt: null,
+        };
+        await controller.addTicket(ticketWithMeta);
+
+        // Auto-create SLA record
+        const slaConfig = await controller.getSLAConfigByPriority(ticket.priority || 'medium');
+        if (slaConfig) {
+            const slaRecord = {
+                id: `sla-${ticketWithMeta.id}`,
+                ticketId: ticketWithMeta.id,
+                responseDeadline: new Date(Date.now() + slaConfig.responseMinutes * 60000).toISOString(),
+                resolutionDeadline: new Date(Date.now() + slaConfig.resolutionMinutes * 60000).toISOString(),
+                firstResponseAt: null, resolvedAt: null, escalationLevel: 0,
+                breached: false, escalationTriggered: false, createdAt: new Date().toISOString(),
+            };
+            await controller.addSLARecord(slaRecord);
+            await controller.updateTicket(ticketWithMeta.id, { slaRecordId: slaRecord.id });
+        }
+
+        // Send confirmation email
+        if (customer?.email) {
+            const appUrl = c.env?.APP_URL || 'http://localhost:5173';
+            const { sendEmail, createTicketCreatedEmail } = await import('./email-service');
+            const ticketUrl = `${appUrl}/customer/tickets/${ticketWithMeta.id}`;
+            const email = createTicketCreatedEmail(customer.email, customer.name, ticketWithMeta.id, ticket.title, ticket.description, ticketUrl);
+            await sendEmail(email, c.env);
+        }
+
+        return c.json({ success: true, data: ticketWithMeta });
+    });
+
+    app.get('/api/customer/profile', authMiddleware(), async (c) => {
+        const user = getUser(c);
+        if (user.role !== 'customer') return c.json({ success: false, error: 'Forbidden' }, { status: 403 });
+
+        const controller = getAppController(c.env);
+        const customer = await controller.getCustomer(user.sub);
+        if (!customer) return c.json({ success: false, error: 'Customer not found' }, { status: 404 });
+
+        // Return public fields only
+        return c.json({ success: true, data: { id: customer.id, name: customer.name, email: customer.email, phone: customer.phone, company: customer.company, createdAt: customer.createdAt } });
+    });
+
+    app.patch('/api/customer/profile', authMiddleware(), async (c) => {
+        const user = getUser(c);
+        if (user.role !== 'customer') return c.json({ success: false, error: 'Forbidden' }, { status: 403 });
+
+        const updates = await c.req.json();
+        const controller = getAppController(c.env);
+        const updated = await controller.updateCustomer(user.sub, {
+            name: updates.name,
+            phone: updates.phone,
+            company: updates.company,
+            updatedAt: new Date().toISOString(),
+        } as any);
+
+        if (!updated) return c.json({ success: false, error: 'Customer not found' }, { status: 404 });
+        return c.json({ success: true, data: { id: updated.id, name: updated.name, email: updated.email, phone: updated.phone, company: updated.company } });
+    });
+
+    // ─── Live Chat ─────────────────────────────────────────
+
+    app.post('/api/chat-sessions', async (c) => {
+        const { customerId, customerName, customerEmail } = await c.req.json();
+        if (!customerName) return c.json({ success: false, error: 'Customer name required' }, { status: 400 });
+
+        const controller = getAppController(c.env);
+        const session = await controller.addChatSession({
+            id: `chat-${crypto.randomUUID()}`,
+            customerId: customerId || null,
+            customerName,
+            customerEmail: customerEmail || null,
+            agentId: null,
+            state: 'collecting',
+            aiSummary: null,
+            suggestedCategory: null,
+            suggestedPriority: null,
+            transcript: [],
+            typingIndicator: { customer: false, agent: false },
+            createdAt: new Date().toISOString(),
+            closedAt: null,
+            ticketId: null,
+            maxConcurrentChats: 2,
+        } as any);
+
+        return c.json({ success: true, data: session });
+    });
+
+    // AI Greeting Bot — processes customer message and returns AI response
+    app.post('/api/chat-sessions/:id/chat', async (c) => {
+        const chatId = c.req.param('id');
+        const { message, customerName } = await c.req.json();
+        if (!message) return c.json({ success: false, error: 'Message required' }, { status: 400 });
+
+        const controller = getAppController(c.env);
+        const session = await controller.getChatSession(chatId);
+        if (!session) return c.json({ success: false, error: 'Chat session not found' }, { status: 404 });
+        if ((session as any).state !== 'collecting') return c.json({ success: false, error: 'Chat is not in collecting state' }, { status: 400 });
+
+        // Store customer message
+        await controller.addChatMessage({
+            id: `msg-${crypto.randomUUID()}`,
+            chatId,
+            sender: 'customer',
+            text: message,
+            attachments: [],
+            timestamp: new Date().toISOString(),
+            read: false,
+        } as any);
+
+        // Get conversation history for context
+        const messages = await controller.getChatMessages(chatId);
+        const conversationHistory = messages.slice(-10).map(m => ({ role: m.sender === 'customer' ? 'user' : 'assistant', content: m.text }));
+
+        // Process with AI bot
+        const result = await processChatMessage(
+            message,
+            conversationHistory,
+            c.env?.CF_AI_API_KEY,
+            c.env?.CF_AI_BASE_URL
+        );
+
+        // Store AI response
+        await controller.addChatMessage({
+            id: `msg-${crypto.randomUUID()}`,
+            chatId,
+            sender: 'ai',
+            text: result.reply,
+            attachments: [],
+            timestamp: new Date().toISOString(),
+            read: false,
+        } as any);
+
+        // If AI is ready for agent, transition chat to waiting state
+        if (result.readyForAgent && result.data) {
+            await controller.updateChatSession(chatId, {
+                state: 'waiting',
+                aiSummary: result.data.summary,
+                suggestedCategory: result.data.category,
+                suggestedPriority: result.data.priority,
+            } as any);
+
+            // Notify available agents via notification
+            const users = await controller.listUsers();
+            const notif = {
+                id: crypto.randomUUID(),
+                type: 'chat-incoming' as const,
+                recipientId: '',
+                read: false,
+                createdAt: new Date().toISOString(),
+                expiresAt: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+                data: { chatId, customerName: session.customerName, summary: result.data.summary, category: result.data.category, priority: result.data.priority },
+            };
+            for (const u of users) {
+                if (u.role === 'agent' || u.role === 'supervisor') {
+                    await controller.addNotification({ ...notif, id: crypto.randomUUID(), recipientId: u.id });
+                }
+            }
+        }
+
+        return c.json({ success: true, data: { reply: result.reply, readyForAgent: result.readyForAgent } });
+    });
+
+    app.get('/api/chat-sessions/:id/messages', authMiddleware(), async (c) => {
+        const controller = getAppController(c.env);
+        const messages = await controller.getChatMessages(c.req.param('id'));
+        return c.json({ success: true, data: messages });
+    });
+
+    app.post('/api/chat-sessions/:id/messages', async (c) => {
+        const chatId = c.req.param('id');
+        const { sender, text } = await c.req.json();
+        if (!sender || !text) return c.json({ success: false, error: 'Sender and text required' }, { status: 400 });
+
+        const controller = getAppController(c.env);
+        const msg = await controller.addChatMessage({
+            id: `msg-${crypto.randomUUID()}`,
+            chatId,
+            sender: sender as any,
+            text,
+            attachments: [],
+            timestamp: new Date().toISOString(),
+            read: false,
+        } as any);
+
+        return c.json({ success: true, data: msg });
+    });
+
+    app.get('/api/chat-sessions/:id/stream', async (c) => {
+        const chatId = c.req.param('id');
+        const controller = getAppController(c.env);
+
+        // Get initial messages
+        const initialMessages = await controller.getChatMessages(chatId);
+
+        const { readable, writable } = new TransformStream();
+        const writer = writable.getWriter();
+        const encoder = new TextEncoder();
+
+        // Send initial messages
+        for (const msg of initialMessages) {
+            await writer.write(encoder.encode(`data: ${JSON.stringify({ type: 'message', data: msg })}\n\n`));
+        }
+
+        // Heartbeat
+        const heartbeatInterval = setInterval(async () => {
+            try { await writer.write(encoder.encode(': heartbeat\n\n')); } catch { clearInterval(heartbeatInterval); }
+        }, 15000);
+
+        // Poll for new messages
+        let lastCount = initialMessages.length;
+        const pollInterval = setInterval(async () => {
+            try {
+                const messages = await controller.getChatMessages(chatId);
+                if (messages.length > lastCount) {
+                    for (let i = lastCount; i < messages.length; i++) {
+                        await writer.write(encoder.encode(`data: ${JSON.stringify({ type: 'message', data: messages[i] })}\n\n`));
+                    }
+                    lastCount = messages.length;
+                }
+            } catch { /* ignore */ }
+        }, 2000);
+
+        // Close on client disconnect
+        c.req.raw.signal.addEventListener('abort', () => {
+            clearInterval(heartbeatInterval);
+            clearInterval(pollInterval);
+            writer.close().catch(() => {});
+        });
+
+        return new Response(readable, {
+            headers: {
+                'Content-Type': 'text/event-stream',
+                'Cache-Control': 'no-cache',
+                'Connection': 'keep-alive',
+                'Access-Control-Allow-Origin': '*',
+            },
+        });
+    });
+
+    app.post('/api/chat-sessions/:id/typing', async (c) => {
+        const chatId = c.req.param('id');
+        const { sender, isTyping } = await c.req.json();
+
+        const controller = getAppController(c.env);
+        const session = await controller.getChatSession(chatId);
+        if (!session) return c.json({ success: false, error: 'Chat session not found' }, { status: 404 });
+
+        (session as any).typingIndicator = {
+            ...(session as any).typingIndicator || {},
+            [sender]: isTyping,
+        };
+        await controller.updateChatSession(chatId, { typingIndicator: (session as any).typingIndicator });
+
+        return c.json({ success: true });
+    });
+
+    app.post('/api/chat-sessions/:id/attachments', authMiddleware(), async (c) => {
+        const chatId = c.req.param('id');
+        const formData = await c.req.formData();
+        const file = formData.get('file') as File;
+        if (!file) return c.json({ success: false, error: 'File required' }, { status: 400 });
+        if (file.size > 10 * 1024 * 1024) return c.json({ success: false, error: 'File too large (max 10MB)' }, { status: 400 });
+
+        const key = `chat-attachments/${chatId}/${crypto.randomUUID()}-${file.name}`;
+        await c.env.ATTACHMENTS_BUCKET.put(key, file.stream(), {
+            httpMetadata: { contentType: file.type },
+        });
+
+        const attachment = { key, filename: file.name, contentType: file.type, size: file.size };
+        const controller = getAppController(c.env);
+        const msg = await controller.addChatMessage({
+            id: `msg-${crypto.randomUUID()}`,
+            chatId,
+            sender: 'system',
+            text: `File attached: ${file.name}`,
+            attachments: [attachment],
+            timestamp: new Date().toISOString(),
+            read: false,
+        } as any);
+
+        return c.json({ success: true, data: { message: msg, attachment } });
+    });
+
+    app.get('/api/chat-sessions/queue', authMiddleware(), async (c) => {
+        const controller = getAppController(c.env);
+        const waitingChats = await controller.listWaitingChats();
+        return c.json({ success: true, data: waitingChats });
+    });
+
+    app.post('/api/chat-sessions/:id/accept', authMiddleware(), async (c) => {
+        const user = getUser(c);
+        const chatId = c.req.param('id');
+        const controller = getAppController(c.env);
+        const session = await controller.updateChatSession(chatId, {
+            agentId: user.sub,
+            state: 'active',
+        } as any);
+        if (!session) return c.json({ success: false, error: 'Chat session not found' }, { status: 404 });
+        return c.json({ success: true, data: session });
+    });
+
+    app.post('/api/chat-sessions/:id/decline', authMiddleware(), async (c) => {
+        const chatId = c.req.param('id');
+        const controller = getAppController(c.env);
+        // Chat stays in 'waiting' state, will be offered to next agent
+        return c.json({ success: true, data: { message: 'Chat declined' } });
+    });
+
+    app.post('/api/chat-sessions/:id/transfer', authMiddleware(), async (c) => {
+        const chatId = c.req.param('id');
+        const controller = getAppController(c.env);
+        const session = await controller.updateChatSession(chatId, {
+            agentId: null,
+            state: 'waiting',
+        } as any);
+        return c.json({ success: true, data: session });
+    });
+
+    app.post('/api/chat-sessions/:id/close', authMiddleware(), async (c) => {
+        const chatId = c.req.param('id');
+        const { saveAsTicket } = await c.req.json();
+        const controller = getAppController(c.env);
+
+        const session = await controller.updateChatSession(chatId, {
+            state: 'closed',
+            closedAt: new Date().toISOString(),
+        } as any);
+
+        if (saveAsTicket && session) {
+            // Create ticket from chat transcript
+            const messages = await controller.getChatMessages(chatId);
+            const transcript = messages.map(m => `[${m.sender}] ${m.text}`).join('\n');
+            const ticketId = `T-${Date.now()}`;
+            const ticket = {
+                id: ticketId,
+                title: (session as any).aiSummary || `Chat from ${session.customerName}`,
+                description: transcript,
+                customerName: session.customerName,
+                customerId: session.customerId,
+                priority: (session as any).suggestedPriority || 'medium',
+                status: 'open',
+                category: (session as any).suggestedCategory || 'General Inquiry',
+                createdAt: new Date().toISOString(),
+                transcript,
+                assignedTo: session.agentId,
+                slaRecordId: null,
+                escalationLevel: 0,
+                resolutionTime: null,
+                resolvedAt: null,
+                resolvedBy: null,
+                internalNotes: [{ text: `Chat transcript from ${session.createdAt}`, authorId: session.agentId || 'system', authorName: 'Chat', timestamp: new Date().toISOString() }],
+                publicNotes: null,
+                attachments: [],
+                tags: ['from-chat'],
+                publicToken: crypto.randomUUID(),
+                mergedInto: null,
+                fcrFlag: false,
+                handleTimeSeconds: null,
+                updatedAt: new Date().toISOString(),
+                lastCustomerReplyAt: null,
+            };
+            await controller.addTicket(ticket);
+            await controller.updateChatSession(chatId, { ticketId } as any);
+        }
+
+        return c.json({ success: true, data: { session, ticketId: saveAsTicket ? (session as any).ticketId : null } });
+    });
+
+    // Chat CSAT
+    app.post('/api/chat-sessions/:id/csat', async (c) => {
+        const chatId = c.req.param('id');
+        const { rating, comment } = await c.req.json();
+        if (!rating || rating < 1 || rating > 5) return c.json({ success: false, error: 'Valid rating (1-5) required' }, { status: 400 });
+
+        const controller = getAppController(c.env);
+        const session = await controller.getChatSession(chatId);
+        if (!session) return c.json({ success: false, error: 'Chat session not found' }, { status: 404 });
+
+        // Check for duplicate
+        const existingCSATs = await controller.listCSATResponses();
+        if (existingCSATs.find(r => r.ticketId === chatId)) {
+            return c.json({ success: false, error: 'CSAT already submitted for this chat' }, { status: 409 });
+        }
+
+        const csat = {
+            id: `csat-chat-${crypto.randomUUID()}`,
+            ticketId: chatId,
+            rating,
+            comment: comment || null,
+            submittedAt: new Date().toISOString(),
+            customerEmail: session.customerEmail || '',
+        };
+        await controller.addCSATResponse(csat);
+        return c.json({ success: true, data: csat });
+    });
+
+    // Agent chat limit config
+    app.patch('/api/agents/me/chat-limit', authMiddleware(), async (c) => {
+        const { maxConcurrentChats } = await c.req.json();
+        if (!maxConcurrentChats || maxConcurrentChats < 1 || maxConcurrentChats > 5) {
+            return c.json({ success: false, error: 'maxConcurrentChats must be 1-5' }, { status: 400 });
+        }
+        const user = getUser(c);
+        const controller = getAppController(c.env);
+        await controller.updateUser(user.sub, { maxConcurrentChats } as any);
+        return c.json({ success: true });
     });
 }

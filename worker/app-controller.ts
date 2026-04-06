@@ -5,7 +5,8 @@ import type {
   Customer, CallRecord, AuditEntry,
   CannedResponse, Holiday, PasswordReset,
   SavedView, TicketRelation, CSATResponse, AutoCloseRule,
-  ShiftSchedule, BreakLog, ScheduledReport, EmailTemplate
+  ShiftSchedule, BreakLog, ScheduledReport, EmailTemplate,
+  ChatSession, ChatMessage, AuthSession
 } from './types';
 import type { Env } from './core-utils';
 export class AppController extends DurableObject<Env> {
@@ -32,6 +33,9 @@ export class AppController extends DurableObject<Env> {
   private breakLogs = new Map<string, BreakLog>();
   private scheduledReports = new Map<string, ScheduledReport>();
   private emailTemplates = new Map<string, EmailTemplate>();
+  private chatSessions = new Map<string, ChatSession>();
+  private chatMessages = new Map<string, ChatMessage>();
+  private customerSessions = new Map<string, AuthSession>(); // customer refresh tokens
   private loaded = false;
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -60,6 +64,9 @@ export class AppController extends DurableObject<Env> {
       const storedBreaks = await this.ctx.storage.get<Record<string, BreakLog>>('breakLogs') || {};
       const storedScheduledReports = await this.ctx.storage.get<Record<string, ScheduledReport>>('scheduledReports') || {};
       const storedEmailTemplates = await this.ctx.storage.get<Record<string, EmailTemplate>>('emailTemplates') || {};
+      const storedChatSessions = await this.ctx.storage.get<Record<string, ChatSession>>('chatSessions') || {};
+      const storedChatMessages = await this.ctx.storage.get<Record<string, ChatMessage>>('chatMessages') || {};
+      const storedCustomerSessions = await this.ctx.storage.get<Record<string, AuthSession>>('customerSessions') || {};
       this.sessions = new Map(Object.entries(storedSessions));
       this.tickets = new Map(Object.entries(storedTickets));
       this.users = new Map(Object.entries(storedUsers));
@@ -82,6 +89,9 @@ export class AppController extends DurableObject<Env> {
       this.breakLogs = new Map(Object.entries(storedBreaks));
       this.scheduledReports = new Map(Object.entries(storedScheduledReports));
       this.emailTemplates = new Map(Object.entries(storedEmailTemplates));
+      this.chatSessions = new Map(Object.entries(storedChatSessions));
+      this.chatMessages = new Map(Object.entries(storedChatMessages));
+      this.customerSessions = new Map(Object.entries(storedCustomerSessions));
       if (this.tickets.size === 0) {
         const mockTickets: Ticket[] = [
           {
@@ -178,6 +188,21 @@ export class AppController extends DurableObject<Env> {
         }
       }
       if (migratedSLA) await this.persistSLARecords();
+      // Migrate existing customers that lack new auth fields
+      let migratedCustomers = false;
+      for (const [id, customer] of this.customers) {
+        if ((customer as any).passwordHash === undefined) {
+          (customer as any).passwordHash = null;
+          (customer as any).passwordSalt = null;
+          (customer as any).isActive = true;
+          (customer as any).lastLoginAt = null;
+          (customer as any).emailVerifiedAt = null;
+          (customer as any).verificationToken = null;
+          (customer as any).verificationTokenExpiry = null;
+          migratedCustomers = true;
+        }
+      }
+      if (migratedCustomers) await this.persistCustomers();
       // Seed default system settings
       if (this.settings.size === 0) {
         this.settings.set('system', {
@@ -287,6 +312,15 @@ export class AppController extends DurableObject<Env> {
   }
   private async persistEmailTemplates(): Promise<void> {
     await this.ctx.storage.put('emailTemplates', Object.fromEntries(this.emailTemplates));
+  }
+  private async persistChatSessions(): Promise<void> {
+    await this.ctx.storage.put('chatSessions', Object.fromEntries(this.chatSessions));
+  }
+  private async persistChatMessages(): Promise<void> {
+    await this.ctx.storage.put('chatMessages', Object.fromEntries(this.chatMessages));
+  }
+  private async persistCustomerSessions(): Promise<void> {
+    await this.ctx.storage.put('customerSessions', Object.fromEntries(this.customerSessions));
   }
   async addSession(sessionId: string, title?: string): Promise<void> {
     await this.ensureLoaded();
@@ -850,5 +884,80 @@ export class AppController extends DurableObject<Env> {
   async deleteEmailTemplate(id: string): Promise<boolean> {
     await this.ensureLoaded();
     return this.emailTemplates.delete(id);
+  }
+
+  // ─── Chat Session Methods ──────────────────────────────────
+  async addChatSession(session: ChatSession): Promise<void> {
+    await this.ensureLoaded();
+    this.chatSessions.set(session.id, session);
+    await this.persistChatSessions();
+  }
+  async getChatSession(id: string): Promise<ChatSession | null> {
+    await this.ensureLoaded();
+    return this.chatSessions.get(id) || null;
+  }
+  async updateChatSession(id: string, updates: Partial<ChatSession>): Promise<ChatSession | null> {
+    await this.ensureLoaded();
+    const session = this.chatSessions.get(id);
+    if (!session) return null;
+    const updated = { ...session, ...updates };
+    this.chatSessions.set(id, updated);
+    await this.persistChatSessions();
+    return updated;
+  }
+  async deleteChatSession(id: string): Promise<boolean> {
+    await this.ensureLoaded();
+    return this.chatSessions.delete(id);
+  }
+  async listChatSessions(agentId?: string): Promise<ChatSession[]> {
+    await this.ensureLoaded();
+    let sessions = Array.from(this.chatSessions.values());
+    if (agentId) sessions = sessions.filter(s => s.agentId === agentId);
+    return sessions.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+  async listWaitingChats(): Promise<ChatSession[]> {
+    await this.ensureLoaded();
+    return this.chatSessions.values().filter(s => s.state === 'waiting').sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  }
+  async listActiveChats(agentId?: string): Promise<ChatSession[]> {
+    await this.ensureLoaded();
+    let sessions = Array.from(this.chatSessions.values()).filter(s => s.state === 'active');
+    if (agentId) sessions = sessions.filter(s => s.agentId === agentId);
+    return sessions;
+  }
+
+  // ─── Chat Message Methods ──────────────────────────────────
+  async addChatMessage(msg: ChatMessage): Promise<void> {
+    await this.ensureLoaded();
+    this.chatMessages.set(msg.id, msg);
+    await this.persistChatMessages();
+  }
+  async getChatMessages(chatId: string): Promise<ChatMessage[]> {
+    await this.ensureLoaded();
+    return Array.from(this.chatMessages.values())
+      .filter(m => m.chatId === chatId)
+      .sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+  }
+  async getCustomerSessions(customerId: string): Promise<AuthSession[]> {
+    await this.ensureLoaded();
+    return Array.from(this.customerSessions.values()).filter(s => s.userId === customerId && !s.revoked);
+  }
+  async addCustomerSession(session: AuthSession): Promise<void> {
+    await this.ensureLoaded();
+    this.customerSessions.set(session.refreshToken, session);
+    await this.persistCustomerSessions();
+  }
+  async getCustomerSession(refreshToken: string): Promise<AuthSession | null> {
+    await this.ensureLoaded();
+    return this.customerSessions.get(refreshToken) || null;
+  }
+  async revokeCustomerSession(refreshToken: string): Promise<boolean> {
+    await this.ensureLoaded();
+    const session = this.customerSessions.get(refreshToken);
+    if (!session) return false;
+    session.revoked = true;
+    this.customerSessions.set(refreshToken, session);
+    await this.persistCustomerSessions();
+    return true;
   }
 }

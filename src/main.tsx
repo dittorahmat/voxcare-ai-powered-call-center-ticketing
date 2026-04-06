@@ -7,6 +7,7 @@ import {
   createBrowserRouter,
   RouterProvider,
   Navigate,
+  Outlet,
 } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
@@ -46,6 +47,14 @@ import { ScheduledReportsSettings } from '@/pages/Settings/ScheduledReportsSetti
 import { NotificationSettings } from '@/pages/Settings/NotificationSettings'
 import { AnalyticsDashboard } from '@/pages/AnalyticsDashboard'
 import { useTicketStore } from '@/store/ticketStore';
+import { CustomerAuthProvider } from '@/context/CustomerAuthContext';
+import { CustomerLoginPage } from '@/pages/CustomerLoginPage';
+import { CustomerRegisterPage } from '@/pages/CustomerRegisterPage';
+import { CustomerForgotPasswordPage, CustomerResetPasswordPage, CustomerVerifyPage } from '@/pages/CustomerAuthPages';
+import { CustomerDashboardPage } from '@/pages/CustomerDashboardPage';
+import { CustomerTicketsPage, CustomerNewTicketPage, CustomerTicketDetailPage } from '@/pages/CustomerTicketPages';
+import { CustomerProfilePage } from '@/pages/CustomerProfilePage';
+import { CustomerChatPage } from '@/pages/CustomerChatPage';
 
 const queryClient = new QueryClient();
 
@@ -55,6 +64,26 @@ const router = createBrowserRouter([
   { path: "/forgot-password", element: <ForgotPassword /> },
   { path: "/reset-password", element: <ResetPassword /> },
   { path: "/public/ticket/:token", element: <PublicTicketView /> },
+  // Customer portal routes
+  {
+    path: "/customer",
+    element: <CustomerAuthProvider><Outlet /></CustomerAuthProvider>,
+    errorElement: <RouteErrorBoundary />,
+    children: [
+      { index: true, element: <Navigate to="/customer/dashboard" replace /> },
+      { path: "login", element: <CustomerLoginPage /> },
+      { path: "register", element: <CustomerRegisterPage /> },
+      { path: "verify/:token", element: <CustomerVerifyPage /> },
+      { path: "forgot-password", element: <CustomerForgotPasswordPage /> },
+      { path: "reset-password/:token", element: <CustomerResetPasswordPage /> },
+      { path: "dashboard", element: <CustomerDashboardPage /> },
+      { path: "tickets", element: <CustomerTicketsPage /> },
+      { path: "tickets/new", element: <CustomerNewTicketPage /> },
+      { path: "tickets/:id", element: <CustomerTicketDetailPage /> },
+      { path: "profile", element: <CustomerProfilePage /> },
+      { path: "chat", element: <CustomerChatPage /> },
+    ],
+  },
   // Protected routes
   {
     path: "/",
