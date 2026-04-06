@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { Ticket, TicketPriority, TicketStatus } from '../../worker/types';
+import { apiGet, apiPost, apiPatch } from '@/lib/apiClient';
 interface TicketState {
   tickets: Ticket[];
   isLoading: boolean;
@@ -16,14 +17,17 @@ export const useTicketStore = create<TicketState>((set, get) => ({
   initialize: async () => {
     set({ error: null });
     try {
-      const res = await fetch('/api/tickets');
-      const json = await res.json();
+      const json = await apiGet<{ success: boolean; data: Ticket[] }>('/api/tickets');
       if (json.success) {
         set({ tickets: json.data, isLoading: false, error: null });
       } else {
         throw new Error(json.error);
       }
     } catch (err: any) {
+      if (err.message === 'Unauthorized') {
+        set({ isLoading: false, error: null, tickets: [] });
+        return;
+      }
       set({ error: err.message, isLoading: false });
     }
   },
@@ -31,11 +35,7 @@ export const useTicketStore = create<TicketState>((set, get) => ({
     const prevState = get();
     set({ tickets: [ticket, ...prevState.tickets] }); // Optimistic
     try {
-      await fetch('/api/tickets', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(ticket)
-      });
+      await apiPost('/api/tickets', ticket);
     } catch (err) {
       set(prevState); // Rollback
     }
@@ -44,11 +44,7 @@ export const useTicketStore = create<TicketState>((set, get) => ({
     const prevState = get();
     set({ tickets: prevState.tickets.map(t => t.id === id ? { ...t, status } : t) });
     try {
-      await fetch(`/api/tickets/${id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status })
-      });
+      await apiPatch(`/api/tickets/${id}`, { status });
     } catch (err) {
       set(prevState);
     }
@@ -57,11 +53,7 @@ export const useTicketStore = create<TicketState>((set, get) => ({
     const prevState = get();
     set({ tickets: prevState.tickets.map(t => t.id === id ? { ...t, ...updates } : t) });
     try {
-      await fetch(`/api/tickets/${id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updates)
-      });
+      await apiPatch(`/api/tickets/${id}`, updates);
     } catch (err) {
       set(prevState);
     }

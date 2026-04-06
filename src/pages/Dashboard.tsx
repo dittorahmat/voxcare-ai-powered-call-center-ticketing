@@ -1,5 +1,6 @@
 import React, { useMemo } from 'react';
 import { useTicketStore } from '@/store/ticketStore';
+import { useAuth } from '@/context/AuthContext';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Inbox, CheckCircle2, Clock, Activity, ArrowUpRight, PhoneCall, Plus } from 'lucide-react';
@@ -9,6 +10,7 @@ import { Button } from '@/components/ui/button';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 import { CreateTicketDialog } from '@/components/tickets/CreateTicketDialog';
 export function Dashboard() {
+  const { user } = useAuth();
   const tickets = useTicketStore(s => s.tickets);
   const isLoading = useTicketStore(s => s.isLoading);
   const stats = useMemo(() => [
@@ -37,7 +39,7 @@ export function Dashboard() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div className="flex flex-col gap-1">
           <h1 className="text-3xl font-bold tracking-tight">Agent Dashboard</h1>
-          <p className="text-muted-foreground">Welcome back, Jane. Here's your real-time performance overview.</p>
+          <p className="text-muted-foreground">Welcome back, {user?.name || 'Agent'}. Here's your real-time performance overview.</p>
         </div>
         <CreateTicketDialog 
           trigger={

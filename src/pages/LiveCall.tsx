@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useTicketStore } from '@/store/ticketStore';
 import { chatService } from '@/lib/chat';
+import { apiPost } from '@/lib/apiClient';
 import { toast } from 'sonner';
 export function LiveCall() {
   const [isRecording, setIsRecording] = useState(false);
@@ -98,14 +99,38 @@ export function LiveCall() {
   };
   const onSave = async () => {
     if (!draftTicket) return;
+    const ticketId = `T-${Math.floor(Math.random()*9000+1000)}`;
+    const transcriptText = transcript.join('\n');
+
+    // Save ticket
     await addTicket({
-      id: `T-${Math.floor(Math.random()*9000+1000)}`,
+      id: ticketId,
       ...draftTicket,
       customerName: "Recent Caller",
       status: 'open',
       createdAt: new Date().toISOString(),
-      transcript: transcript.join('\n')
+      transcript: transcriptText
     });
+
+    // Save call record
+    try {
+      await apiPost('/api/calls', {
+        callId: crypto.randomUUID(),
+        callerNumber: null,
+        agentId: null,
+        ticketId,
+        status: 'ended',
+        startedAt: new Date().toISOString(),
+        endedAt: new Date().toISOString(),
+        durationSeconds: null,
+        transcript: transcriptText,
+        outcome: 'Ticket created via AI intake',
+      });
+    } catch {
+      // Call record save failure shouldn't block ticket save
+      console.warn('Failed to save call record');
+    }
+
     setDraftTicket(null);
     setTranscript([]);
     toast.success("Ticket saved to cloud.");

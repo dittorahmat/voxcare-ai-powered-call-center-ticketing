@@ -4,13 +4,17 @@
  */
 import type { AppController } from './app-controller';
 import type { ChatAgent } from './agent';
+import type { AuthController } from './auth-controller';
 export interface Env {
     CF_AI_BASE_URL: string;
     CF_AI_API_KEY: string;
     SERPAPI_KEY: string;
     OPENROUTER_API_KEY: string;
+    JWT_SECRET: string;
     CHAT_AGENT: DurableObjectNamespace<ChatAgent>;
     APP_CONTROLLER: DurableObjectNamespace<AppController>;
+    AUTH_CONTROLLER: DurableObjectNamespace<AuthController>;
+    ATTACHMENTS_BUCKET: R2Bucket;
 }
 
 /**
@@ -20,6 +24,15 @@ export interface Env {
 export function getAppController(env: Env): DurableObjectStub<AppController> {
   const id = env.APP_CONTROLLER.idFromName("controller");
   return env.APP_CONTROLLER.get(id);
+}
+
+/**
+ * Get AuthController stub for auth management
+ * Uses a singleton pattern with fixed ID for consistent routing
+ */
+export function getAuthController(env: Env): DurableObjectStub<AuthController> {
+  const id = env.AUTH_CONTROLLER.idFromName("auth");
+  return env.AUTH_CONTROLLER.get(id);
 }
 
 /**

@@ -7,7 +7,9 @@ import { Env } from "./core-utils";
 import { API_RESPONSES } from "./config";
 import { ChatAgent } from "./agent";
 import { AppController } from "./app-controller";
-export { ChatAgent, AppController };
+import { AuthController } from "./auth-controller";
+import { RateLimiter } from "./rate-limiter";
+export { ChatAgent, AppController, AuthController, RateLimiter };
 export interface ClientErrorReport {
   message: string;
   url: string;

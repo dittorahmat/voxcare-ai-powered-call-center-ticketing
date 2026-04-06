@@ -1,9 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { toast } from 'sonner';
-import { Plus } from 'lucide-react';
+import { Plus, User } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -31,8 +31,27 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from '@/components/ui/command';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { cn } from '@/lib/utils';
+import { Check } from 'lucide-react';
+import { apiGet } from '@/lib/apiClient';
 import { useTicketStore } from '@/store/ticketStore';
 import { TicketPriority } from '../../../worker/types';
+
+interface Customer {
+  id: string;
+  name: string;
+  email: string | null;
+  phone: string | null;
+}
 const ticketSchema = z.object({
   customerName: z.string().min(2, 'Customer name is required'),
   title: z.string().min(5, 'Title must be at least 5 characters'),
@@ -46,6 +65,9 @@ interface CreateTicketDialogProps {
 }
 export function CreateTicketDialog({ trigger }: CreateTicketDialogProps) {
   const [open, setOpen] = useState(false);
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
+  const [customerOpen, setCustomerOpen] = useState(false);
   const addTicket = useTicketStore(s => s.addTicket);
   const form = useForm<TicketFormValues>({
     resolver: zodResolver(ticketSchema),
@@ -57,6 +79,14 @@ export function CreateTicketDialog({ trigger }: CreateTicketDialogProps) {
       description: '',
     },
   });
+
+  useEffect(() => {
+    if (open) {
+      apiGet<{ success: boolean; data: Customer[] }>('/api/customers?format=flat')
+        .then(res => setCustomers(res.data || []))
+        .catch(() => {});
+    }
+  }, [open]);
   const onSubmit = async (values: TicketFormValues) => {
     try {
       const newTicket = {
@@ -97,9 +127,43 @@ export function CreateTicketDialog({ trigger }: CreateTicketDialogProps) {
               name="customerName"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Customer Name</FormLabel>
+                  <FormLabel>Customer</FormLabel>
                   <FormControl>
-                    <Input placeholder="John Smith" {...field} />
+                    <Popover open={customerOpen} onOpenChange={setCustomerOpen}>
+                      <PopoverTrigger asChild>
+                        <Button variant="outline" role="combobox" aria-expanded={customerOpen} className="w-full justify-between font-normal">
+                          {selectedCustomer ? selectedCustomer.name : field.value ? field.value : 'Search or select customer...'}
+                          <User className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                        </Button>
+                      </PopoverTrigger>
+                      <PopoverContent className="w-full p-0" align="start">
+                        <Command>
+                          <CommandInput placeholder="Search customers..." />
+                          <CommandList>
+                            <CommandEmpty>No customer found.</CommandEmpty>
+                            <CommandGroup>
+                              {customers.map(c => (
+                                <CommandItem
+                                  key={c.id}
+                                  value={c.name}
+                                  onSelect={() => {
+                                    setSelectedCustomer(c);
+                                    field.onChange(c.name);
+                                    setCustomerOpen(false);
+                                  }}
+                                >
+                                  <Check className={cn("mr-2 h-4 w-4", selectedCustomer?.id === c.id ? "opacity-100" : "opacity-0")} />
+                                  <div>
+                                    <div className="font-medium">{c.name}</div>
+                                    <div className="text-xs text-muted-foreground">{c.email || c.phone || ''}</div>
+                                  </div>
+                                </CommandItem>
+                              ))}
+                            </CommandGroup>
+                          </CommandList>
+                        </Command>
+                      </PopoverContent>
+                    </Popover>
                   </FormControl>
                   <FormMessage />
                 </FormItem>

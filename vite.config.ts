@@ -108,10 +108,37 @@ export default ({ mode }: { mode: string }) => {
     plugins: [react(), cloudflare(), watchDependenciesPlugin(), reloadTriggerPlugin()],
     build: {
       minify: true,
-      sourcemap: "inline", // Use inline source maps for better error reporting
+      sourcemap: false, // Disable sourcemaps in production to reduce bundle size
+      chunkSizeWarningLimit: 1000,
       rollupOptions: {
         output: {
-          sourcemapExcludeSources: false, // Include original source in source maps
+          sourcemapExcludeSources: true,
+          // Manual chunk splitting for better caching
+          manualChunks(id) {
+            if (id.includes('node_modules')) {
+              if (id.includes('react') || id.includes('react-dom') || id.includes('scheduler') ||
+                  id.includes('react-router') || id.includes('react-select') || id.includes('use-sync-external-store') ||
+                  id.includes('@tanstack') || id.includes('zustand') || id.includes('immer')) {
+                return 'vendor-react';
+              }
+              if (id.includes('radix-ui') || id.includes('@radix-ui') || id.includes('@floating-ui')) {
+                return 'vendor-radix';
+              }
+              if (id.includes('recharts') || id.includes('d3-') || id.includes('victory-')) {
+                return 'vendor-charts';
+              }
+              if (id.includes('framer-motion')) {
+                return 'vendor-framer';
+              }
+              if (id.includes('react-hook-form') || id.includes('zod') || id.includes('@hookform')) {
+                return 'vendor-forms';
+              }
+              if (id.includes('lucide') || id.includes('clsx') || id.includes('tailwind-merge') || id.includes('class-variance')) {
+                return 'vendor-ui-utils';
+              }
+              // No catch-all — let Vite auto-bundle remaining deps
+            }
+          },
         },
       },
     },

@@ -1,0 +1,44 @@
+/* Print-friendly styles for ticket detail page */
+@media print {
+  /* Hide navigation, sidebar, interactive elements */
+  nav, aside, [data-sidebar], button, input, select, textarea {
+    display: none !important;
+  }
+
+  /* Main content full width */
+  main, .main-content {
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  /* Clean typography for print */
+  body {
+    font-family: 'Helvetica Neue', Arial, sans-serif;
+    color: #000;
+    background: #fff;
+  }
+
+  /* Remove shadows and backgrounds */
+  * {
+    box-shadow: none !important;
+    background: transparent !important;
+  }
+
+  /* Links as text */
+  a {
+    color: #000;
+    text-decoration: none;
+  }
+
+  /* Ensure badges are visible */
+  [class*="badge"], [class*="Badge"] {
+    border: 1px solid #ccc !important;
+    padding: 2px 8px !important;
+  }
+
+  /* Show URLs after links */
+  a[href]:after {
+    content: none !important;
+  }
+}

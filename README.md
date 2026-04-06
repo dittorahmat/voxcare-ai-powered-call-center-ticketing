@@ -52,10 +52,19 @@ A production-ready, full-stack AI chat application built on Cloudflare Workers. 
      "vars": {
        "CF_AI_BASE_URL": "https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/openai",
        "CF_AI_API_KEY": "{your_ai_gateway_token}",
-       "SERPAPI_KEY": "{optional_serpapi_key}"
+       "SERPAPI_KEY": "{optional_serpapi_key}",
+       "JWT_SECRET": "{generate-a-secure-random-string}"
      }
    }
    ```
+
+   **IMPORTANT**: For production, set all secrets as Worker secrets (not in wrangler.jsonc):
+   ```bash
+   wrangler secret put JWT_SECRET        # A secure random string (e.g., openssl rand -hex 32)
+   wrangler secret put CF_AI_BASE_URL    # https://gateway.ai.cloudflare.com/v1/{account}/{gateway}/openai
+   wrangler secret put CF_AI_API_KEY     # Your Cloudflare AI Gateway API key
+   ```
+   After setting secrets, remove or comment out the placeholder values in `wrangler.jsonc`.
 
 4. Generate Worker types:
    ```bash
