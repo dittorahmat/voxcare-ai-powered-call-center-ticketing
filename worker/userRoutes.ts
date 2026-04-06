@@ -810,7 +810,139 @@ export function userRoutes(app: Hono<{ Bindings: Env }>) {
         });
     });
 
-    // ─── Global Search ───────────────────────────────────────
+    // ─── PDF Report Generation ───────────────────────────────
+    app.get('/api/reports/:type/pdf', authMiddleware(), requireRole('supervisor', 'admin'), async (c) => {
+        const type = c.req.param('type') as string;
+        const from = c.req.query('from');
+        const to = c.req.query('to');
+        const controller = getAppController(c.env);
+        const tickets = await controller.listTickets();
+        const slaRecords = await controller.listSLARecords();
+        const users = await controller.listUsers();
+        const csatStats = await controller.getCSATStats(from, to);
+
+        // Filter tickets by date range
+        let filtered = tickets;
+        if (from) filtered = filtered.filter(t => t.createdAt >= from);
+        if (to) filtered = filtered.filter(t => t.createdAt <= to);
+
+        const resolved = filtered.filter(t => t.status === 'resolved');
+        const slaCompliant = filtered.filter(t => {
+            if (!t.slaRecordId) return true;
+            const sla = slaRecords.find(s => s.id === t.slaRecordId);
+            return sla && !sla.breached;
+        });
+        const slaRate = filtered.length > 0 ? Math.round((slaCompliant.length / filtered.length) * 100) : 100;
+        const fcrCount = resolved.filter(t => t.fcrFlag).length;
+        const fcrRate = resolved.length > 0 ? Math.round((fcrCount / resolved.length) * 10000) / 100 : 0;
+        const withHandleTime = filtered.filter(t => t.handleTimeSeconds != null);
+        const avgHandleTime = withHandleTime.length > 0
+            ? Math.round(withHandleTime.reduce((s, t) => s + (t.handleTimeSeconds || 0), 0) / withHandleTime.length)
+            : 0;
+
+        // Agent performance
+        const agents = users.filter(u => u.role === 'agent' || u.role === 'supervisor');
+        const agentRows = agents.map(agent => {
+            const assigned = filtered.filter(t => t.assignedTo === agent.id);
+            const agentResolved = assigned.filter(t => t.status === 'resolved');
+            const agentSLA = assigned
+                .map(t => slaRecords.find(s => s.id === t.slaRecordId))
+                .filter(Boolean);
+            const agentSLACompliant = agentSLA.filter((r: any) => r && !r.breached).length;
+            const agentSLATotal = agentSLA.length;
+            const agentSLACompliance = agentSLATotal > 0 ? Math.round((agentSLACompliant / agentSLATotal) * 100) : '—';
+            const agentFcrRate = agentResolved.length > 0 ? Math.round((agentResolved.filter(t => t.fcrFlag).length / agentResolved.length) * 100) : '—';
+            return `<tr><td>${agent.name}</td><td>${assigned.length}</td><td>${agentResolved.length}</td><td>${agentSLACompliance}%</td><td>${agentFcrRate}%</td></tr>`;
+        }).join('');
+
+        // Ticket table (top 50)
+        const ticketRows = filtered.slice(0, 50).map(t =>
+            `<tr><td>${t.id}</td><td>${t.title.substring(0, 40)}</td><td>${t.priority}</td><td>${t.status}</td><td>${t.category}</td><td>${new Date(t.createdAt).toLocaleDateString()}</td></tr>`
+        ).join('');
+
+        const dateRange = from && to ? `${from} to ${to}` : 'All Time';
+        const now = new Date().toISOString();
+        const companyName = ((await controller.getSetting('system')) as any)?.companyName || 'VoxCare';
+
+        const reportTitles: Record<string, string> = {
+            'ticket-summary': 'Ringkasan Tiket',
+            'sla-compliance': 'Kepatuhan SLA',
+            'agent-performance': 'Performa Agen',
+        };
+
+        let bodyContent = '';
+
+        if (type === 'ticket-summary') {
+            bodyContent = `
+                <h1 style="color: #1e293b;">${companyName} — ${reportTitles['ticket-summary']}</h1>
+                <p><strong>Periode:</strong> ${dateRange}</p>
+                <p><strong>Dibuat:</strong> ${now}</p>
+                <table style="width:100%; margin: 20px 0; border-collapse: collapse;">
+                    <tr><td style="padding: 12px; border: 1px solid #e2e8f0; background: #f8fafc;"><strong>Total Tiket</strong><br/><span style="font-size:24px;">${filtered.length}</span></td>
+                    <td style="padding: 12px; border: 1px solid #e2e8f0; background: #f8fafc;"><strong>Selesai</strong><br/><span style="font-size:24px; color: #16a34a;">${resolved.length}</span></td>
+                    <td style="padding: 12px; border: 1px solid #e2e8f0; background: #f8fafc;"><strong>Kepatuhan SLA</strong><br/><span style="font-size:24px; color: ${slaRate >= 90 ? '#16a34a' : slaRate >= 75 ? '#ca8a04' : '#dc2626'};">${slaRate}%</span></td>
+                    <td style="padding: 12px; border: 1px solid #e2e8f0; background: #f8fafc;"><strong>FCR Rate</strong><br/><span style="font-size:24px;">${fcrRate}%</span></td></tr>
+                </table>
+                <h3>Daftar Tiket</h3>
+                <table style="width:100%; border-collapse: collapse; font-size: 12px;">
+                    <tr style="background: #e2e8f0;"><th style="padding:8px; border:1px solid #cbd5e1; text-align:left;">ID</th><th style="padding:8px; border:1px solid #cbd5e1; text-align:left;">Judul</th><th style="padding:8px; border:1px solid #cbd5e1;">Prioritas</th><th style="padding:8px; border:1px solid #cbd5e1;">Status</th><th style="padding:8px; border:1px solid #cbd5e1;">Kategori</th><th style="padding:8px; border:1px solid #cbd5e1;">Dibuat</th></tr>
+                    ${ticketRows}
+                </table>
+            `;
+        } else if (type === 'sla-compliance') {
+            bodyContent = `
+                <h1 style="color: #1e293b;">${companyName} — ${reportTitles['sla-compliance']}</h1>
+                <p><strong>Periode:</strong> ${dateRange}</p>
+                <p><strong>Dibuat:</strong> ${now}</p>
+                <table style="width:100%; margin: 20px 0; border-collapse: collapse;">
+                    <tr><td style="padding: 12px; border: 1px solid #e2e8f0; background: #f8fafc;"><strong>Kepatuhan SLA</strong><br/><span style="font-size:24px; color: ${slaRate >= 90 ? '#16a34a' : slaRate >= 75 ? '#ca8a04' : '#dc2626'};">${slaRate}%</span></td>
+                    <td style="padding: 12px; border: 1px solid #e2e8f0; background: #f8fafc;"><strong>SLA Breached</strong><br/><span style="font-size:24px; color: #dc2626;">${filtered.length - slaCompliant.length}</span></td>
+                    <td style="padding: 12px; border: 1px solid #e2e8f0; background: #f8fafc;"><strong>Avg Handle Time</strong><br/><span style="font-size:24px;">${Math.floor(avgHandleTime / 60)}m ${avgHandleTime % 60}s</span></td></tr>
+                </table>
+            `;
+        } else if (type === 'agent-performance') {
+            bodyContent = `
+                <h1 style="color: #1e293b;">${companyName} — ${reportTitles['agent-performance']}</h1>
+                <p><strong>Periode:</strong> ${dateRange}</p>
+                <p><strong>Dibuat:</strong> ${now}</p>
+                <h3>Performa per Agen</h3>
+                <table style="width:100%; border-collapse: collapse; font-size: 12px;">
+                    <tr style="background: #e2e8f0;"><th style="padding:8px; border:1px solid #cbd5e1; text-align:left;">Nama</th><th style="padding:8px; border:1px solid #cbd5e1;">Ditugaskan</th><th style="padding:8px; border:1px solid #cbd5e1;">Selesai</th><th style="padding:8px; border:1px solid #cbd5e1;">SLA</th><th style="padding:8px; border:1px solid #cbd5e1;">FCR</th></tr>
+                    ${agentRows}
+                </table>
+                <p style="margin-top: 16px; color: #64748b;"><strong>Rata-rata CSAT:</strong> ${csatStats.avgRating}/5 (${csatStats.totalResponses} respons)</p>
+            `;
+        } else {
+            return c.json({ success: false, error: 'Unknown report type. Use: ticket-summary, sla-compliance, agent-performance' }, { status: 400 });
+        }
+
+        const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${companyName} Report</title></head><body style="font-family: Arial, sans-serif; padding: 24px; color: #334155;">${bodyContent}<p style="margin-top: 24px; color: #94a3b8; font-size: 11px;">Laporan otomatis dari ${companyName}. <a href="${c.env.APP_URL || 'http://localhost:5173'}" style="color: #6366f1;">Lihat di Dashboard →</a></p></body></html>`;
+
+        // Try Browser Rendering API for PDF
+        const appUrl = c.env.APP_URL || 'http://localhost:5173';
+        if (c.env.BROWSER_RENDERING_API_URL && c.env.BROWSER_RENDERING_API_KEY) {
+            try {
+                const pdfBlob = await generatePDFViaBrowserRendering(html, c.env);
+                if (pdfBlob) {
+                    return new Response(pdfBlob, {
+                        headers: {
+                            'Content-Type': 'application/pdf',
+                            'Content-Disposition': `attachment; filename="${type}_report_${new Date().toISOString().split('T')[0]}.pdf"`,
+                        },
+                    });
+                }
+            } catch (err) {
+                console.warn('[PDF] Browser Rendering API failed, falling back to HTML:', err);
+            }
+        }
+
+        // Fallback: return HTML
+        return new Response(html, {
+            headers: {
+                'Content-Type': 'text/html; charset=utf-8',
+            },
+        });
+    });
     app.get('/api/search', authMiddleware(), async (c) => {
         const q = (c.req.query('q') || '').toLowerCase().trim();
         const types = (c.req.query('type') || 'ticket,customer,call').split(',');
@@ -2150,6 +2282,203 @@ export function userRoutes(app: Hono<{ Bindings: Env }>) {
         return c.json({ success: true, data: publicTicket });
     });
 
+    // ─── Customer Ticket Replies ─────────────────────────────
+    app.post('/api/customer/tickets/:id/replies', authMiddleware(), async (c) => {
+        const user = getUser(c);
+        if (user.role !== 'customer') return c.json({ success: false, error: 'Forbidden' }, { status: 403 });
+
+        const ticketId = c.req.param('id');
+
+        // Rate limit: 10 replies per minute per ticket
+        try {
+            const rateKey = `reply-${ticketId}`;
+            const id = c.env.RATE_LIMITER.idFromName(rateKey);
+            const stub = c.env.RATE_LIMITER.get(id);
+            const res = await stub.fetch(new Request(`http://rate-limiter?key=${encodeURIComponent(rateKey)}&max=10&window=60000`));
+            if (res.status === 429) {
+                const body = await res.json();
+                return c.json({ success: false, error: 'Rate limit exceeded. Please wait before sending another reply.', retryAfter: body.retryAfter }, { status: 429 });
+            }
+        } catch {
+            // If rate limiter is unavailable, allow request through
+        }
+
+        const { text, attachments } = await c.req.json();
+        if (!text?.trim() && (!attachments || attachments.length === 0)) return c.json({ success: false, error: 'Reply text or attachment is required' }, { status: 400 });
+
+        const controller = getAppController(c.env);
+        const ticket = await controller.getTicket(ticketId);
+        if (!ticket) return c.json({ success: false, error: 'Ticket not found' }, { status: 404 });
+        if (ticket.customerId !== user.sub) return c.json({ success: false, error: 'Forbidden' }, { status: 403 });
+
+        const customer = await controller.getCustomer(user.sub);
+        const { reply } = await controller.addTicketReply(ticketId, {
+            id: `reply-${crypto.randomUUID()}`,
+            sender: 'customer',
+            senderId: user.sub,
+            senderName: customer?.name || 'Customer',
+            text: text?.trim() || '',
+            attachments: attachments || [],
+        });
+
+        if (!reply) return c.json({ success: false, error: 'Failed to add reply' }, { status: 500 });
+
+        // Update ticket timestamps
+        await controller.updateTicket(ticketId, {
+            updatedAt: new Date().toISOString(),
+            lastCustomerReplyAt: new Date().toISOString(),
+        });
+
+        // Create notification for assigned agent (or all available agents if unassigned)
+        if (ticket.assignedTo) {
+            await controller.addNotification({
+                id: crypto.randomUUID(),
+                type: 'ticket-updated',
+                recipientId: ticket.assignedTo,
+                read: false,
+                createdAt: new Date().toISOString(),
+                expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+                data: { ticketId, title: ticket.title, replyFrom: customer?.name },
+            });
+
+            // Email notification if agent has email enabled
+            const agent = await controller.getUser(ticket.assignedTo);
+            if (agent?.notificationPrefs?.emailEnabled && agent.email) {
+                const appUrl = c.env.APP_URL || 'http://localhost:5173';
+                const ticketUrl = `${appUrl}/tickets/${ticketId}`;
+                const { sendEmail } = await import('./email-service');
+                await sendEmail({
+                    to: agent.email,
+                    subject: `[VoxCare] ${customer?.name || 'Customer'} replied to ticket ${ticketId}`,
+                    htmlBody: `<p>${customer?.name || 'Customer'} replied to <a href="${ticketUrl}">ticket ${ticketId}</a>: ${text.trim().substring(0, 500)}</p>`,
+                    textBody: `${customer?.name} replied to ticket ${ticketId}: ${text.trim().substring(0, 500)}. View: ${ticketUrl}`,
+                }, c.env);
+            }
+        } else {
+            // Notify all available agents
+            const agents = await controller.listUsers();
+            const availableAgents = agents.filter(a => a.active && a.availability === 'available' && (a.role === 'agent' || a.role === 'supervisor'));
+            for (const agent of availableAgents.slice(0, 5)) {
+                await controller.addNotification({
+                    id: crypto.randomUUID(),
+                    type: 'ticket-updated',
+                    recipientId: agent.id,
+                    read: false,
+                    createdAt: new Date().toISOString(),
+                    expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+                    data: { ticketId, title: ticket.title, replyFrom: customer?.name },
+                });
+            }
+        }
+
+        return c.json({ success: true, data: reply });
+    });
+
+    app.get('/api/customer/tickets/:id/replies', authMiddleware(), async (c) => {
+        const user = getUser(c);
+        if (user.role !== 'customer') return c.json({ success: false, error: 'Forbidden' }, { status: 403 });
+
+        const ticketId = c.req.param('id');
+        const controller = getAppController(c.env);
+        const ticket = await controller.getTicket(ticketId);
+        if (!ticket) return c.json({ success: false, error: 'Ticket not found' }, { status: 404 });
+        if (ticket.customerId !== user.sub) return c.json({ success: false, error: 'Forbidden' }, { status: 403 });
+
+        const replies = await controller.getTicketReplies(ticketId);
+        return c.json({ success: true, data: replies });
+    });
+
+    // ─── Customer Ticket Reply Attachments ───────────────────
+    app.post('/api/customer/tickets/:id/replies/attachments', authMiddleware(), async (c) => {
+        const user = getUser(c);
+        if (user.role !== 'customer') return c.json({ success: false, error: 'Forbidden' }, { status: 403 });
+
+        const ticketId = c.req.param('id');
+        const controller = getAppController(c.env);
+        const ticket = await controller.getTicket(ticketId);
+        if (!ticket) return c.json({ success: false, error: 'Ticket not found' }, { status: 404 });
+        if (ticket.customerId !== user.sub) return c.json({ success: false, error: 'Forbidden' }, { status: 403 });
+
+        const formData = await c.req.formData();
+        const file = formData.get('file') as File;
+        if (!file) return c.json({ success: false, error: 'No file provided' }, { status: 400 });
+        if (file.size > 10 * 1024 * 1024) return c.json({ success: false, error: 'File too large. Maximum 10MB.' }, { status: 400 });
+
+        const key = `tickets/${ticketId}/${crypto.randomUUID()}-${file.name}`;
+        try {
+            await c.env.ATTACHMENTS_BUCKET.put(key, file.stream(), {
+                httpMetadata: { contentType: file.type },
+                customMetadata: { ticketId, fileName: file.name, uploadedBy: user.sub },
+            });
+        } catch {
+            console.warn('R2 not available, attachment stored as metadata only');
+        }
+
+        const attachment = {
+            key,
+            filename: file.name,
+            contentType: file.type,
+            size: file.size,
+            uploadedAt: new Date().toISOString(),
+        };
+
+        // Also add to ticket attachments
+        const existingAttachments = ticket.attachments || [];
+        await controller.updateTicket(ticketId, { attachments: [...existingAttachments, attachment] });
+
+        return c.json({ success: true, data: attachment });
+    });
+
+    // ─── Agent Ticket Replies ────────────────────────────────
+    app.post('/api/tickets/:id/replies', authMiddleware(), requireRole('agent', 'supervisor', 'admin'), async (c) => {
+        const user = getUser(c);
+        const ticketId = c.req.param('id');
+        const { text } = await c.req.json();
+        if (!text?.trim()) return c.json({ success: false, error: 'Reply text is required' }, { status: 400 });
+
+        const controller = getAppController(c.env);
+        const ticket = await controller.getTicket(ticketId);
+        if (!ticket) return c.json({ success: false, error: 'Ticket not found' }, { status: 404 });
+
+        const { reply } = await controller.addTicketReply(ticketId, {
+            id: `reply-${crypto.randomUUID()}`,
+            sender: 'agent',
+            senderId: user.sub,
+            senderName: user.name,
+            text: text.trim(),
+        });
+
+        if (!reply) return c.json({ success: false, error: 'Failed to add reply' }, { status: 500 });
+
+        await controller.updateTicket(ticketId, { updatedAt: new Date().toISOString() });
+
+        // Notify customer (if customer has notification prefs, check them)
+        if (ticket.customerId) {
+            const customer = await controller.getCustomer(ticket.customerId);
+            if (customer?.email) {
+                // Check notification prefs - default to allowed if null
+                const prefs = (customer as any).notificationPrefs;
+                const agentReplyEnabled = !prefs || prefs.events?.['agent-reply'] !== false;
+                if (agentReplyEnabled && prefs?.frequency !== 'daily-digest') {
+                    const appUrl = c.env.APP_URL || 'http://localhost:5173';
+                    const ticketUrl = `${appUrl}/public/ticket/${ticket.publicToken}`;
+                    const { sendEmail, createTicketUpdatedEmail } = await import('./email-service');
+                    const email = createTicketUpdatedEmail(customer.email, customer.name, ticketId, ticket.title, text.trim(), ticketUrl);
+                    await sendEmail(email, c.env);
+                }
+            }
+        }
+
+        return c.json({ success: true, data: reply });
+    });
+
+    app.get('/api/tickets/:id/replies', authMiddleware(), async (c) => {
+        const ticketId = c.req.param('id');
+        const controller = getAppController(c.env);
+        const replies = await controller.getTicketReplies(ticketId);
+        return c.json({ success: true, data: replies });
+    });
+
     app.post('/api/customer/tickets', authMiddleware(), async (c) => {
         const user = getUser(c);
         if (user.role !== 'customer') return c.json({ success: false, error: 'Forbidden' }, { status: 403 });
@@ -2237,6 +2566,17 @@ export function userRoutes(app: Hono<{ Bindings: Env }>) {
 
         if (!updated) return c.json({ success: false, error: 'Customer not found' }, { status: 404 });
         return c.json({ success: true, data: { id: updated.id, name: updated.name, email: updated.email, phone: updated.phone, company: updated.company } });
+    });
+
+    // ─── Customer Chat Sessions ────────────────────────────
+    app.get('/api/customer/chat-sessions', authMiddleware(), async (c) => {
+        const user = getUser(c);
+        if (user.role !== 'customer') return c.json({ success: false, error: 'Forbidden' }, { status: 403 });
+
+        const controller = getAppController(c.env);
+        const allSessions = await controller.listChatSessions();
+        const customerSessions = allSessions.filter(s => s.customerId === user.sub);
+        return c.json({ success: true, data: customerSessions.sort((a, b) => b.createdAt.localeCompare(a.createdAt)) });
     });
 
     // ─── Live Chat ─────────────────────────────────────────

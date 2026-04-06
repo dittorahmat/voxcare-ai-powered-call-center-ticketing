@@ -88,7 +88,10 @@ export function AgentChatQueuePanel({ onAcceptChat }: { onAcceptChat: (chatId: s
                 <div className="flex items-start justify-between">
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className="font-medium text-sm">{chat.customerName}</span>
+                      <span className="font-medium text-sm">{chat.customerName || 'Anonymous'}</span>
+                      {chat.customerEmail && (
+                        <span className="text-xs text-muted-foreground truncate max-w-[150px]">{chat.customerEmail}</span>
+                      )}
                       {chat.suggestedPriority && (
                         <Badge className={`${PRIORITY_COLORS[chat.suggestedPriority] || ''} text-[10px]`}>
                           {chat.suggestedPriority}

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { apiGet, apiPost } from '@/lib/apiClient';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -6,9 +6,11 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
+import { ScrollArea } from '@/components/ui/scroll-area';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Plus, Search } from 'lucide-react';
+import { Plus, Search, Send, Loader2, Paperclip } from 'lucide-react';
 import { toast } from 'sonner';
+import { ConversationThread } from '@/components/tickets/ConversationThread';
 
 const STATUS_COLORS: Record<string, string> = {
   'open': 'bg-blue-100 text-blue-800', 'in-progress': 'bg-yellow-100 text-yellow-800',
@@ -152,17 +154,77 @@ export function CustomerNewTicketPage() {
 
 export function CustomerTicketDetailPage() {
   const [ticket, setTicket] = useState<any>(null);
+  const [replies, setReplies] = useState<any[]>([]);
+  const [replyText, setReplyText] = useState('');
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [sending, setSending] = useState(false);
   const [loading, setLoading] = useState(true);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const id = window.location.pathname.split('/').pop();
-    apiGet<{ success: boolean; data: any }>(`/api/customer/tickets/${id}`)
-      .then(res => { if (res.success) setTicket(res.data); })
+    Promise.all([
+      apiGet<{ success: boolean; data: any }>(`/api/customer/tickets/${id}`),
+      apiGet<{ success: boolean; data: any[] }>(`/api/customer/tickets/${id}/replies`),
+    ])
+      .then(([ticketRes, repliesRes]) => {
+        if (ticketRes.success) setTicket(ticketRes.data);
+        if (repliesRes.success) setReplies(repliesRes.data);
+      })
       .catch(() => {}).finally(() => setLoading(false));
   }, []);
 
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
+  }, [replies]);
+
+  const handleReply = async () => {
+    if ((!replyText.trim() && selectedFiles.length === 0) || !ticket) return;
+    setSending(true);
+
+    try {
+      // Upload attachments first
+      const attachments: any[] = [];
+      for (const file of selectedFiles) {
+        const formData = new FormData();
+        formData.append('file', file);
+        const uploadRes = await fetch(`/api/customer/tickets/${ticket.id}/replies/attachments`, {
+          method: 'POST',
+          body: formData,
+          credentials: 'include',
+        });
+        if (uploadRes.ok) {
+          const uploadData = await uploadRes.json();
+          if (uploadData.success) attachments.push(uploadData.data);
+        }
+      }
+
+      // Send reply with attachments
+      const res = await apiPost(`/api/customer/tickets/${ticket.id}/replies`, {
+        text: replyText.trim(),
+        attachments,
+      });
+      if (res.success) {
+        setReplies(prev => [...prev, res.data]);
+        setReplyText('');
+        setSelectedFiles([]);
+        toast.success('Reply sent');
+      }
+    } catch {
+      toast.error('Failed to send reply');
+    }
+    setSending(false);
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    setSelectedFiles(prev => [...prev, ...files]);
+  };
+
   if (loading) return <div className="min-h-screen flex items-center justify-center">Loading...</div>;
   if (!ticket) return <div className="min-h-screen flex items-center justify-center">Ticket not found</div>;
+
+  const isResolved = ticket.status === 'resolved' || ticket.status === 'closed';
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -181,20 +243,82 @@ export function CustomerTicketDetailPage() {
             </div>
             <p className="text-sm text-muted-foreground">{ticket.id} · {ticket.category} · {ticket.priority} priority · Created {new Date(ticket.createdAt).toLocaleDateString()}</p>
           </CardHeader>
-          <CardContent className="space-y-4">
-            <div>
-              <h4 className="text-sm font-medium mb-1">Description</h4>
-              <p className="text-sm text-muted-foreground whitespace-pre-wrap">{ticket.description}</p>
-            </div>
-            {ticket.publicNotes && (
-              <div className="p-4 bg-slate-50 rounded-lg">
-                <h4 className="text-sm font-medium mb-1">Response</h4>
-                <p className="text-sm text-muted-foreground whitespace-pre-wrap">{ticket.publicNotes.text}</p>
-                <p className="text-xs text-muted-foreground mt-2">— {ticket.publicNotes.authorName}, {new Date(ticket.publicNotes.timestamp).toLocaleString()}</p>
-              </div>
-            )}
+          <CardContent>
+            <p className="text-sm text-muted-foreground whitespace-pre-wrap">{ticket.description}</p>
           </CardContent>
         </Card>
+
+        <Card className="border-none shadow-sm">
+          <CardHeader>
+            <CardTitle className="text-base">Percakapan ({replies.length})</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ScrollArea className="h-[400px] pr-4" ref={scrollRef}>
+              <ConversationThread replies={replies} />
+            </ScrollArea>
+          </CardContent>
+        </Card>
+
+        {!isResolved && (
+          <Card className="border-none shadow-sm">
+            <CardHeader>
+              <CardTitle className="text-base">Balas</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="flex gap-2">
+                <div className="flex-1 space-y-2">
+                  <Textarea
+                    value={replyText}
+                    onChange={e => setReplyText(e.target.value)}
+                    placeholder="Ketik balasan Anda..."
+                    className="min-h-[80px]"
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' && e.ctrlKey) handleReply();
+                    }}
+                  />
+                  {selectedFiles.length > 0 && (
+                    <div className="flex flex-wrap gap-2">
+                      {selectedFiles.map((f, i) => (
+                        <div key={i} className="flex items-center gap-1 text-xs bg-slate-100 px-2 py-1 rounded">
+                          <Paperclip className="h-3 w-3" />
+                          <span className="truncate max-w-[120px]">{f.name}</span>
+                          <button onClick={() => setSelectedFiles(prev => prev.filter((_, idx) => idx !== i))} className="text-red-500 ml-1">×</button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div className="flex items-center gap-2">
+                    <label className="cursor-pointer">
+                      <input
+                        type="file"
+                        multiple
+                        accept="image/jpeg,image/png,image/gif,image/webp,application/pdf,text/plain,text/csv,application/msword,application/vnd.openxmlformats-officedocument"
+                        className="hidden"
+                        onChange={handleFileSelect}
+                      />
+                      <Paperclip className="h-4 w-4 text-muted-foreground hover:text-foreground transition" />
+                    </label>
+                    <span className="text-xs text-muted-foreground">Lampiran (maks 10MB)</span>
+                  </div>
+                </div>
+                <Button
+                  onClick={handleReply}
+                  disabled={sending || (!replyText.trim() && selectedFiles.length === 0)}
+                  className="self-end"
+                >
+                  {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground mt-2">Tekan Ctrl+Enter untuk mengirim</p>
+            </CardContent>
+          </Card>
+        )}
+
+        {isResolved && (
+          <div className="text-center text-sm text-muted-foreground py-4">
+            Tiket ini telah {ticket.status === 'resolved' ? 'selesai' : 'ditutup'}. Buat tiket baru jika Anda membutuhkan bantuan lebih lanjut.
+          </div>
+        )}
       </main>
     </div>
   );

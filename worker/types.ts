@@ -161,6 +161,12 @@ export interface Customer {
   emailVerifiedAt: string | null;
   verificationToken: string | null;
   verificationTokenExpiry: number | null;
+  // Notification preferences
+  notificationPrefs: {
+    events: Record<string, boolean>;
+    frequency: 'instant' | 'daily-digest';
+    digestTime: string; // HH:MM
+  } | null;
 }
 
 export interface AuditEntry {
@@ -243,6 +249,17 @@ export interface PublicNote {
   timestamp: string;
 }
 
+export interface TicketReply {
+  id: string;
+  ticketId: string;
+  sender: 'customer' | 'agent' | 'system';
+  senderId: string;
+  senderName: string;
+  text: string;
+  attachments: TicketAttachment[];
+  timestamp: string;
+}
+
 export interface Ticket {
   id: string;
   title: string;
@@ -280,6 +297,13 @@ export interface Ticket {
   updatedAt: string | null;
   // Last customer reply date (for auto-close)
   lastCustomerReplyAt: string | null;
+  // Conversation replies (unified thread)
+  replies: TicketReply[];
+  // AI assist fields
+  aiSuggestedCategory: string | null;
+  aiSuggestedPriority: string | null;
+  sentimentAlert: { score: number; label: string; timestamp: string } | null;
+  sentimentScores: { score: number; label: string; timestamp: string; messageId: string }[];
 }
 export interface Message {
   role: 'user' | 'assistant' | 'system';

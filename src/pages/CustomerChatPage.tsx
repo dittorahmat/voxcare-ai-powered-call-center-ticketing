@@ -7,6 +7,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Send, ArrowLeft, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
+import { useCustomerAuth } from '@/context/CustomerAuthContext';
 
 interface ChatMessage {
   id: string;
@@ -18,6 +19,7 @@ interface ChatMessage {
 }
 
 export function CustomerChatPage() {
+  const { user } = useCustomerAuth();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
@@ -28,8 +30,11 @@ export function CustomerChatPage() {
   const typingTimeout = useRef<ReturnType<typeof setTimeout>>();
 
   useEffect(() => {
-    // Create or resume chat session
-    apiPost('/api/chat-sessions', { customerName: 'Customer', customerEmail: null })
+    // Create or resume chat session with customer identity
+    const customerName = user?.name || 'Pelanggan';
+    const customerEmail = user?.email || null;
+    const customerId = user?.id || null;
+    apiPost('/api/chat-sessions', { customerId, customerName, customerEmail })
       .then(res => {
         if (res.success) {
           setSessionId(res.data.id);

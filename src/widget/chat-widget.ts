@@ -26,6 +26,8 @@
       text: script.dataset.text || DEFAULTS.text,
       apiUrl: script.dataset.apiUrl || window.location.origin,
       accountId: script.dataset.accountId || '',
+      customerName: script.dataset.customerName || null,
+      customerEmail: script.dataset.customerEmail || null,
     };
   }
 
@@ -142,7 +144,10 @@
         const res = await fetch(`${options.apiUrl}/api/chat-sessions`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ customerName: 'Website Visitor', customerEmail: null }),
+          body: JSON.stringify({
+            customerName: options.customerName || 'Website Visitor',
+            customerEmail: options.customerEmail || null,
+          }),
         });
         const data = await res.json();
         if (data.success) {

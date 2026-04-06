@@ -11,6 +11,12 @@ export interface Env {
     SERPAPI_KEY: string;
     OPENROUTER_API_KEY: string;
     JWT_SECRET: string;
+    APP_URL: string;
+    SENDGRID_API_KEY: string;
+    EMAIL_FROM: string;
+    EMAIL_FROM_NAME: string;
+    BROWSER_RENDERING_API_URL: string;
+    BROWSER_RENDERING_API_KEY: string;
     CHAT_AGENT: DurableObjectNamespace<ChatAgent>;
     APP_CONTROLLER: DurableObjectNamespace<AppController>;
     AUTH_CONTROLLER: DurableObjectNamespace<AuthController>;

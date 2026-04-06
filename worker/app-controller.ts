@@ -139,6 +139,33 @@ export class AppController extends DurableObject<Env> {
           (ticket as any).customerId = null;
           migratedTickets = true;
         }
+        // Migrate replies array
+        if ((ticket as any).replies === undefined) {
+          (ticket as any).replies = [];
+          migratedTickets = true;
+        }
+        // Migrate publicNotes to first reply entry
+        if (ticket.publicNotes && (ticket as any).replies?.length === 0) {
+          (ticket as any).replies = [{
+            id: `reply-migration-${ticket.id}`,
+            ticketId: ticket.id,
+            sender: 'agent' as const,
+            senderId: ticket.publicNotes.authorId || 'system',
+            senderName: ticket.publicNotes.authorName || 'Agent',
+            text: ticket.publicNotes.text,
+            attachments: [],
+            timestamp: ticket.publicNotes.timestamp || ticket.createdAt,
+          }];
+          migratedTickets = true;
+        }
+        // AI assist fields
+        if ((ticket as any).aiSuggestedCategory === undefined) {
+          (ticket as any).aiSuggestedCategory = null;
+          (ticket as any).aiSuggestedPriority = null;
+          (ticket as any).sentimentAlert = null;
+          (ticket as any).sentimentScores = [];
+          migratedTickets = true;
+        }
       }
       if (migratedTickets) {
         await this.persistTickets();
@@ -199,6 +226,11 @@ export class AppController extends DurableObject<Env> {
           (customer as any).emailVerifiedAt = null;
           (customer as any).verificationToken = null;
           (customer as any).verificationTokenExpiry = null;
+          migratedCustomers = true;
+        }
+        // Migrate notification prefs
+        if ((customer as any).notificationPrefs === undefined) {
+          (customer as any).notificationPrefs = null;
           migratedCustomers = true;
         }
       }
@@ -390,6 +422,47 @@ export class AppController extends DurableObject<Env> {
   async getTicket(id: string): Promise<Ticket | null> {
     await this.ensureLoaded();
     return this.tickets.get(id) || null;
+  }
+
+  // ─── Ticket Reply Methods ──────────────────────────────────
+  async addTicketReply(ticketId: string, reply: {
+    id: string;
+    sender: 'customer' | 'agent' | 'system';
+    senderId: string;
+    senderName: string;
+    text: string;
+    attachments?: { key: string; filename: string; contentType: string; size: number }[];
+  }): Promise<{ reply: any; ticket: Ticket | null }> {
+    await this.ensureLoaded();
+    const ticket = this.tickets.get(ticketId);
+    if (!ticket) return { reply: null, ticket: null };
+
+    const replyEntry = {
+      id: reply.id,
+      ticketId,
+      sender: reply.sender,
+      senderId: reply.senderId,
+      senderName: reply.senderName,
+      text: reply.text,
+      attachments: reply.attachments || [],
+      timestamp: new Date().toISOString(),
+    };
+
+    const replies = ticket.replies || [];
+    replies.push(replyEntry);
+    ticket.replies = replies;
+    this.tickets.set(ticketId, ticket);
+    await this.persistTickets();
+
+    return { reply: replyEntry, ticket };
+  }
+
+  async getTicketReplies(ticketId: string): Promise<any[]> {
+    await this.ensureLoaded();
+    const ticket = this.tickets.get(ticketId);
+    if (!ticket) return [];
+    const replies = ticket.replies || [];
+    return replies.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
   }
 
   // ─── User Methods ──────────────────────────────────────────
@@ -741,6 +814,12 @@ export class AppController extends DurableObject<Env> {
   async listCSATResponses(): Promise<CSATResponse[]> {
     await this.ensureLoaded();
     return Array.from(this.csatResponses.values()).sort((a, b) => b.submittedAt.localeCompare(a.submittedAt));
+  }
+  async deleteCSATResponse(id: string): Promise<boolean> {
+    await this.ensureLoaded();
+    const deleted = this.csatResponses.delete(id);
+    if (deleted) await this.persistCSATResponses();
+    return deleted;
   }
   async getCSATStats(fromDate?: string, toDate?: string): Promise<{ avgRating: number; responseRate: number; totalResponses: number }> {
     await this.ensureLoaded();

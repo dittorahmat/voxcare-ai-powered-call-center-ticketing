@@ -10,11 +10,13 @@ import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Separator } from '@/components/ui/separator';
 import { Textarea } from '@/components/ui/textarea';
-import { ArrowLeft, Calendar, User, Tag, MessageSquare, Sparkles, ShieldAlert, CheckCircle2, Save, Check, Clock, Paperclip, Upload, ExternalLink, Trash2, Link as LinkIcon } from 'lucide-react';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { ArrowLeft, Calendar, User, Tag, MessageSquare, Sparkles, ShieldAlert, CheckCircle2, Save, Check, Clock, Paperclip, Upload, ExternalLink, Trash2, Link as LinkIcon, Send } from 'lucide-react';
 import { format, formatDistanceToNow } from 'date-fns';
 import { TagInput } from '@/components/tickets/TagInput';
 import { RelatedTicketsPanel } from '@/components/tickets/RelatedTicketsPanel';
 import { ActivityFilter } from '@/components/tickets/ActivityFilter';
+import { ConversationThread } from '@/components/tickets/ConversationThread';
 import { apiGetAllTags, apiPostRelation, apiDeleteRelation } from '@/lib/apiClient';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
 import { KeyboardShortcutsHelpDialog } from '@/components/KeyboardShortcutsHelpDialog';
@@ -25,6 +27,8 @@ export function TicketDetails() {
   const updateTicket = useTicketStore(s => s.updateTicket);
   const ticket = tickets.find(t => t.id === id);
   const [localDesc, setLocalDesc] = useState(ticket?.publicNotes?.text || ticket?.description || '');
+  const [threadReplies, setThreadReplies] = useState<any[]>([]);
+  const [agentReplyText, setAgentReplyText] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [internalNoteText, setInternalNoteText] = useState('');
   const [internalNoteDialogOpen, setInternalNoteDialogOpen] = useState(false);
@@ -62,6 +66,34 @@ export function TicketDetails() {
         .catch(() => setCannedLoaded(true));
     }
   }, [cannedLoaded]);
+
+  // Load thread replies
+  useEffect(() => {
+    if (id) {
+      apiGet<{ success: boolean; data: any[] }>(`/api/tickets/${id}/replies`)
+        .then(res => { if (res.success) setThreadReplies(res.data); })
+        .catch(() => {});
+    }
+  }, [id]);
+
+  const handleAgentReply = async () => {
+    if (!agentReplyText.trim() || !id) return;
+    try {
+      const res = await apiPost(`/api/tickets/${id}/replies`, { text: agentReplyText.trim() });
+      if (res.success) {
+        setThreadReplies(prev => [...prev, res.data]);
+        setAgentReplyText('');
+        // Also update publicNotes for backward compat
+        if (ticket) {
+          await updateTicket(ticket.id, {
+            publicNotes: { text: agentReplyText.trim(), authorId: user?.id || '', authorName: user?.name || 'Agent', timestamp: new Date().toISOString() },
+          } as any);
+        }
+      }
+    } catch {
+      // Error handled by client
+    }
+  };
 
   useKeyboardShortcuts({
     onReply: () => { const el = document.querySelector('[data-public-note]') as HTMLElement; el?.focus(); },
@@ -171,13 +203,33 @@ export function TicketDetails() {
               </CardTitle>
             </CardHeader>
             <CardContent className="p-0">
-              <Tabs defaultValue={ticket.transcript ? "transcript" : "notes"} className="w-full">
-                <TabsList className="w-full grid grid-cols-3 rounded-none bg-slate-50/50">
+              <Tabs defaultValue={ticket.transcript ? "transcript" : "thread"} className="w-full">
+                <TabsList className="w-full grid grid-cols-4 rounded-none bg-slate-50/50">
+                  <TabsTrigger value="thread" className="data-[state=active]:bg-white rounded-none border-b-2 data-[state=active]:border-indigo-600">Thread</TabsTrigger>
                   <TabsTrigger value="transcript" className="data-[state=active]:bg-white rounded-none border-b-2 data-[state=active]:border-indigo-600">Voice Transcript</TabsTrigger>
                   <TabsTrigger value="public-notes" className="data-[state=active]:bg-white rounded-none border-b-2 data-[state=active]:border-indigo-600">Public Notes</TabsTrigger>
                   <TabsTrigger value="internal-notes" className="data-[state=active]:bg-white rounded-none border-b-2 data-[state=active]:border-amber-500">Internal Notes</TabsTrigger>
                 </TabsList>
                 <div className="p-6">
+                  <TabsContent value="thread" className="space-y-4 m-0">
+                    <div className="space-y-4">
+                      <ScrollArea className="h-[400px] pr-4">
+                        <ConversationThread replies={threadReplies} />
+                      </ScrollArea>
+                      <div className="flex gap-2 pt-2 border-t">
+                        <Textarea
+                          value={agentReplyText}
+                          onChange={e => setAgentReplyText(e.target.value)}
+                          placeholder="Balas sebagai agen..."
+                          className="min-h-[60px]"
+                          onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); handleAgentReply(); } }}
+                        />
+                        <Button onClick={handleAgentReply} disabled={!agentReplyText.trim()} size="sm" className="self-end">
+                          <Send className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
+                  </TabsContent>
                   <TabsContent value="transcript" className="space-y-4 m-0">
                     <div className="bg-slate-50/80 rounded-2xl p-6 border ring-1 ring-slate-100 min-h-[300px]">
                       {ticket.transcript ? (

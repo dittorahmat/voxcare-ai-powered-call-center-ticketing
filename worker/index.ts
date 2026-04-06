@@ -11,6 +11,20 @@ import { AuthController } from "./auth-controller";
 import { RateLimiter } from "./rate-limiter";
 import { LiveChatController } from "./live-chat-controller";
 export { ChatAgent, AppController, AuthController, RateLimiter, LiveChatController };
+
+let cronJobsLoaded = false;
+let cronJobsModule: typeof import("./cron-jobs") | null = null;
+
+const loadCronJobs = async () => {
+  if (cronJobsLoaded) return;
+  try {
+    cronJobsModule = await import("./cron-jobs");
+    cronJobsLoaded = true;
+  } catch (e) {
+    console.error("[Cron] Failed to load cron jobs module:", e);
+  }
+};
+
 export interface ClientErrorReport {
   message: string;
   url: string;
@@ -131,5 +145,49 @@ export default {
     }
 
     return app.fetch(request, env, ctx);
+  },
+  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
+    await loadCronJobs();
+    if (!cronJobsModule) {
+      console.error("[Cron] cron-jobs module not loaded");
+      return;
+    }
+
+    const { runAutoCloseEvaluation, runCSATReminders, runCSATCleanup, runScheduledReportDelivery } = cronJobsModule!;
+    const cronType = event.cron;
+
+    console.log(`[Cron] Starting cron: ${cronType} at ${new Date().toISOString()}`);
+
+    try {
+      switch (cronType) {
+        case "*/30 * * * *": {
+          console.log("[Cron] Job: Auto-Close Evaluation started");
+          const result = await runAutoCloseEvaluation(env);
+          console.log(`[Cron] Job: Auto-Close Evaluation completed. Closed: ${result.closedCount}`);
+          break;
+        }
+        case "0 */6 * * *": {
+          console.log("[Cron] Job: CSAT Reminders started");
+          const result = await runCSATReminders(env);
+          console.log(`[Cron] Job: CSAT Reminders completed. Reminders sent: ${result.remindersSent}`);
+          break;
+        }
+        case "0 3 * * *": {
+          console.log("[Cron] Job: CSAT Cleanup started");
+          const result = await runCSATCleanup(env);
+          console.log(`[Cron] Job: CSAT Cleanup completed. Deleted: ${result.deletedCount}`);
+          break;
+        }
+        default: {
+          console.log(`[Cron] Job: Scheduled Report Delivery (unknown cron: ${cronType})`);
+          const result = await runScheduledReportDelivery(env);
+          console.log(`[Cron] Job: Scheduled Report Delivery completed. Delivered: ${result.delivered}, Skipped: ${result.skipped}, Failed: ${result.failed}`);
+        }
+      }
+    } catch (error) {
+      console.error(`[Cron] Error in cron handler (${cronType}):`, error);
+    }
+
+    console.log(`[Cron] Cron finished: ${cronType} at ${new Date().toISOString()}`);
   },
 } satisfies ExportedHandler<Env>;
