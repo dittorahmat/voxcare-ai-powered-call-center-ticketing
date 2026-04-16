@@ -1,6 +1,6 @@
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
-	"name": "voxcare-taqj9oa2s4uxvtewbgw3c",
+	"name": "voxcare-ai-powered-call-center-ticketing",
 	"main": "worker/index.ts",
 	"compatibility_date": "2025-04-24",
 	"compatibility_flags": ["nodejs_compat"],
