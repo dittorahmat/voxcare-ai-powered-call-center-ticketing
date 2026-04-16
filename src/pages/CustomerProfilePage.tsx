@@ -2,12 +2,14 @@ import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useCustomerAuth } from '@/context/CustomerAuthContext';
 import { apiGet, apiPatch } from '@/lib/apiClient';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { LogOut, User } from 'lucide-react';
+import { Separator } from '@/components/ui/separator';
+import { LogOut, User, Bell } from 'lucide-react';
 import { toast } from 'sonner';
+import { NotificationPreferencesForm } from '@/components/settings/NotificationPreferencesForm';
 
 export function CustomerProfilePage() {
   const { user, logout } = useCustomerAuth();
@@ -73,6 +75,18 @@ export function CustomerProfilePage() {
               </div>
               <Button type="submit" disabled={loading}>{loading ? 'Saving...' : 'Save Changes'}</Button>
             </form>
+          </CardContent>
+        </Card>
+
+        <Separator />
+
+        <Card className="border-none shadow-sm">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2"><Bell className="h-5 w-5" /> Preferensi Notifikasi</CardTitle>
+            <CardDescription>Kelola notifikasi email yang Anda terima</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <NotificationPreferencesForm />
           </CardContent>
         </Card>
       </main>

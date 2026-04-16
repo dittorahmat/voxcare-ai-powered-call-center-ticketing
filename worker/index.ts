@@ -153,7 +153,7 @@ export default {
       return;
     }
 
-    const { runAutoCloseEvaluation, runCSATReminders, runCSATCleanup, runScheduledReportDelivery } = cronJobsModule!;
+    const { runAutoCloseEvaluation, runCSATReminders, runCSATCleanup, runScheduledReportDelivery, runDailyDigest, checkWAHAHealth } = cronJobsModule!;
     const cronType = event.cron;
 
     console.log(`[Cron] Starting cron: ${cronType} at ${new Date().toISOString()}`);
@@ -176,6 +176,12 @@ export default {
           console.log("[Cron] Job: CSAT Cleanup started");
           const result = await runCSATCleanup(env);
           console.log(`[Cron] Job: CSAT Cleanup completed. Deleted: ${result.deletedCount}`);
+          break;
+        }
+        case "0 9 * * *": {
+          console.log("[Cron] Job: Daily Digest started");
+          const result = await runDailyDigest(env);
+          console.log(`[Cron] Job: Daily Digest completed. Sent: ${result.sent}, Skipped: ${result.skipped}`);
           break;
         }
         default: {

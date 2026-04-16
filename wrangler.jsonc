@@ -54,17 +54,11 @@
 		"enabled": true
 	},
 	"vars": {
-		/* 
-		 * IMPORTANT: These values are placeholders for local development only.
-		 * For production, set secrets using:
-		 *   wrangler secret put JWT_SECRET
-		 *   wrangler secret put CF_AI_BASE_URL
-		 *   wrangler secret put CF_AI_API_KEY
-		 * See README.md for detailed setup instructions.
-		 */
 		"CF_AI_BASE_URL": "https://gateway.ai.cloudflare.com/v1/YOUR_ACCOUNT_ID/YOUR_GATEWAY_ID/openai",
 		"CF_AI_API_KEY": "your-cloudflare-api-key",
-		"JWT_SECRET": "dev-secret-change-me-in-production"
+		"JWT_SECRET": "dev-secret-change-me-in-production",
+		"WAHA_URL": "http://localhost:3000",
+		"WAHA_API_KEY": "your-waha-api-key"
 	},
 	/*
 	 * R2 bucket for file attachments.
@@ -78,11 +72,19 @@
 			"preview_bucket_name": "voxcare-attachments-preview"
 		}
 	],
+	"kv_namespaces": [
+		{
+			"binding": "KNOWLEDGE_BASE_KV",
+			"id": "your-kv-namespace-id",
+			"preview_id": "your-preview-kv-namespace-id"
+		}
+	],
 	"triggers": {
 		"crons": [
 			"*/30 * * * *",
 			"0 */6 * * *",
-			"0 3 * * *"
+			"0 3 * * *",
+			"0 9 * * *"
 		]
 	}
 }

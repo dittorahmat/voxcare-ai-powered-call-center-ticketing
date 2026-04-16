@@ -1,6 +1,90 @@
 import { getAppController } from './core-utils';
 import { Env } from './core-utils';
 import { sendEmail, createTicketResolvedEmail } from './email-service';
+import { getWAHAStatus } from './whatsapp';
+
+/**
+ * Process daily digest notifications for customers who opted in.
+ * Collects queued notifications per customer and sends a summary email.
+ */
+export async function runDailyDigest(env: Env): Promise<{ sent: number; skipped: number }> {
+  const controller = getAppController(env);
+  const queues = await controller.getAllDigestQueues();
+  const appUrl = env.APP_URL || 'http://localhost:5173';
+  let sent = 0;
+  let skipped = 0;
+
+  for (const queueEntry of queues) {
+    const customer = await controller.getCustomer(queueEntry.customerId);
+    if (!customer?.email) { skipped++; continue; }
+
+    const prefs = (customer as any).notificationPrefs;
+    if (!prefs || prefs.frequency !== 'daily-digest') { skipped++; continue; }
+
+    if (queueEntry.notifications.length === 0) { skipped++; continue; }
+
+    // Build digest email HTML
+    const rows = queueEntry.notifications.map(n =>
+      `<tr><td style="padding:8px;border-bottom:1px solid #e5e7eb;">${n.type}</td><td style="padding:8px;border-bottom:1px solid #e5e7eb;"><a href="${appUrl}/public/ticket/${n.ticketId}">${n.title}</a></td><td style="padding:8px;border-bottom:1px solid #e5e7eb;">${new Date(n.timestamp).toLocaleString()}</td></tr>`
+    ).join('');
+
+    const htmlBody = `
+      <div style="font-family:sans-serif;max-width:600px;margin:auto;">
+        <h2 style="color:#2563eb;">Ringkasan Harian VoxCare</h2>
+        <p>Halo ${customer.name},</p>
+        <p>Berikut adalah ringkasan notifikasi tiket Anda hari ini:</p>
+        <table style="width:100%;border-collapse:collapse;margin:16px 0;">
+          <tr style="background:#f3f4f6;"><th style="padding:8px;text-align:left;">Tipe</th><th style="padding:8px;text-align:left;">Tiket</th><th style="padding:8px;text-align:left;">Waktu</th></tr>
+          ${rows}
+        </table>
+        <p><a href="${appUrl}/customer/tickets" style="display:inline-block;padding:12px 24px;background:#2563eb;color:#fff;text-decoration:none;border-radius:6px;">Lihat Semua Tiket →</a></p>
+      </div>
+    `;
+
+    await sendEmail({
+      to: customer.email,
+      toName: customer.name,
+      subject: `Ringkasan Harian VoxCare — ${queueEntry.notifications.length} notifikasi`,
+      html: htmlBody,
+      text: `Ringkasan harian: ${queueEntry.notifications.length} notifikasi tiket. Lihat: ${appUrl}/customer/tickets`,
+    }, env);
+
+    // Clear the queue for this customer
+    await controller.getAndClearDigestQueue(queueEntry.customerId);
+    sent++;
+  }
+
+  return { sent, skipped };
+}
+
+/**
+ * Check WAHA health and alert supervisors if disconnected.
+ */
+export async function checkWAHAHealth(env: Env): Promise<{ healthy: boolean; error?: string }> {
+  const status = await getWAHAStatus(env);
+
+  if (!status.connected) {
+    // Alert all supervisors
+    const controller = getAppController(env);
+    const users = await controller.listUsers();
+    for (const user of users) {
+      if (user.role === 'supervisor' || user.role === 'admin') {
+        await controller.addNotification({
+          id: crypto.randomUUID(),
+          type: 'system-alert',
+          recipientId: user.id,
+          read: false,
+          createdAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+          data: { message: 'WhatsApp channel disconnected. Please reconnect WAHA session.', error: status.error },
+        });
+      }
+    }
+    return { healthy: false, error: status.error };
+  }
+
+  return { healthy: true };
+}
 
 /**
  * Generate PDF by POSTing HTML to Cloudflare Browser Rendering API.

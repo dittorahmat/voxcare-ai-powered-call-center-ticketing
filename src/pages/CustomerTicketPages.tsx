@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Plus, Search, Send, Loader2, Paperclip } from 'lucide-react';
+import { Plus, Search, Send, Loader2, Paperclip, BookOpen } from 'lucide-react';
 import { toast } from 'sonner';
 import { ConversationThread } from '@/components/tickets/ConversationThread';
 
@@ -82,6 +82,24 @@ export function CustomerNewTicketPage() {
   const [category, setCategory] = useState('General Inquiry');
   const [priority, setPriority] = useState('medium');
   const [loading, setLoading] = useState(false);
+  const [suggestedArticles, setSuggestedArticles] = useState<any[]>([]);
+
+  // Fetch KB suggestions as user types
+  useEffect(() => {
+    const timer = setTimeout(async () => {
+      if (title.length > 3 || description.length > 10) {
+        try {
+          const params = new URLSearchParams();
+          params.set('search', `${title} ${description}`);
+          const res = await apiGet<{ success: boolean; data: any[] }>(`/api/knowledge-base/articles?${params}`);
+          if (res.success) setSuggestedArticles(res.data.slice(0, 3));
+        } catch { setSuggestedArticles([]); }
+      } else {
+        setSuggestedArticles([]);
+      }
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [title, description]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -143,6 +161,26 @@ export function CustomerNewTicketPage() {
                 <label className="text-sm font-medium">Description</label>
                 <Textarea value={description} onChange={e => setDescription(e.target.value)} required className="min-h-[120px]" />
               </div>
+              {suggestedArticles.length > 0 && (
+                <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                  <div className="flex items-center gap-2 mb-2">
+                    <BookOpen className="h-4 w-4 text-blue-600" />
+                    <span className="text-sm font-medium text-blue-800">Artikel yang mungkin membantu</span>
+                  </div>
+                  <div className="space-y-1">
+                    {suggestedArticles.map(a => (
+                      <Link
+                        key={a.id}
+                        to={`/kb/${a.id}`}
+                        target="_blank"
+                        className="block text-sm text-blue-700 hover:text-blue-900 hover:underline py-1"
+                      >
+                        {a.title}
+                      </Link>
+                    ))}
+                  </div>
+                </div>
+              )}
               <Button type="submit" className="w-full" disabled={loading}>{loading ? 'Creating...' : 'Create Ticket'}</Button>
             </form>
           </CardContent>

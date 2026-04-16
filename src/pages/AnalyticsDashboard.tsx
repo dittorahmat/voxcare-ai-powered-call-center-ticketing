@@ -9,7 +9,7 @@ import {
 } from 'recharts';
 import {
   Inbox, CheckCircle2, Clock, TrendingUp, Download, Calendar,
-  BarChart3, Users, Shield, Star, Target, Smile,
+  BarChart3, Users, Shield, Star, Target, Smile, AlertTriangle,
 } from 'lucide-react';
 
 const RANGES = [
@@ -31,6 +31,7 @@ export function AnalyticsDashboard() {
   const [agentData, setAgentData] = useState<any[]>([]);
   const [slaData, setSlaData] = useState<any>(null);
   const [csatData, setCsatData] = useState<any>(null);
+  const [sentimentData, setSentimentData] = useState<any>(null);
   const [fcrData, setFcrData] = useState<number>(0);
   const [ahtData, setAhtData] = useState<number>(0);
   const [tagData, setTagData] = useState<{ name: string; value: number }[]>([]);
@@ -53,18 +54,20 @@ export function AnalyticsDashboard() {
       const params = (f?: string) => f ? `?from=${f}&to=${to}` : '';
 
       try {
-        const [volRes, resRes, slaRes, agentRes, csatRes] = await Promise.all([
+        const [volRes, resRes, slaRes, agentRes, csatRes, sentimentRes] = await Promise.all([
           apiGet(`/api/analytics/volume${params(from)}`),
           user && ['supervisor', 'admin'].includes(user.role) ? apiGet(`/api/analytics/resolution-time${params(from)}`) : Promise.resolve(null),
           apiGet(`/api/analytics/sla-compliance${params(from)}`),
           user && ['supervisor', 'admin'].includes(user.role) ? apiGet(`/api/analytics/agent-performance${params(from)}`) : Promise.resolve(null),
           user && ['supervisor', 'admin'].includes(user.role) ? apiGet(`/api/csat/stats${params(from)}`) : Promise.resolve(null),
+          user && ['supervisor', 'admin'].includes(user.role) ? apiGet(`/api/analytics/sentiment${params(from)}`) : Promise.resolve(null),
         ]);
         if ((volRes as any).success) setVolumeData((volRes as any).data);
         if ((resRes as any)?.success) setResolutionData((resRes as any).data);
         if ((slaRes as any).success) setSlaData((slaRes as any).data);
         if ((agentRes as any)?.success) setAgentData((agentRes as any).data);
         if ((csatRes as any)?.success) setCsatData((csatRes as any).data);
+        if ((sentimentRes as any)?.success) setSentimentData((sentimentRes as any).data);
 
         // Calculate FCR from volume data
         if ((volRes as any).success && (volRes as any).data?.fcrRate !== undefined) {
@@ -223,6 +226,38 @@ export function AnalyticsDashboard() {
               </div>
             </CardContent>
           </Card>
+          {/* Sentiment Card */}
+          {sentimentData && (
+            <Card className="border-none shadow-sm">
+              <CardContent className="p-6">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-muted-foreground">Sentiment Analysis</p>
+                    <div className="flex items-center gap-2 mt-1">
+                      <h3 className="text-2xl font-bold">
+                        {sentimentData.avgScore > 0 ? '+' : ''}{sentimentData.avgScore}
+                      </h3>
+                      <div className="flex items-center gap-1">
+                        <Badge variant={sentimentData.negativePercent > 30 ? 'destructive' : 'secondary'} className="text-[10px]">
+                          <AlertTriangle className="h-3 w-3 mr-1" />
+                          {sentimentData.negativePercent}% negatif
+                        </Badge>
+                      </div>
+                    </div>
+                    <div className="flex gap-3 mt-2 text-xs text-muted-foreground">
+                      <span className="text-green-600">{sentimentData.positiveCount} 👍</span>
+                      <span className="text-gray-500">{sentimentData.neutralCount} 😐</span>
+                      <span className="text-red-600">{sentimentData.negativeCount} 👎</span>
+                      {sentimentData.alertCount > 0 && (
+                        <span className="text-red-500 font-medium">{sentimentData.alertCount} alert</span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="bg-purple-50 text-purple-600 p-3 rounded-xl"><AlertTriangle className="size-6" /></div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
         </div>
       )}
 
@@ -294,6 +329,37 @@ export function AnalyticsDashboard() {
                 <Tooltip />
                 <Bar dataKey="value" fill="#f59e0b" radius={[4, 4, 0, 0]} />
               </BarChart>
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Sentiment Trend Chart */}
+      {sentimentData && sentimentData.trend?.length > 0 && (
+        <Card className="border-none shadow-sm">
+          <CardHeader>
+            <CardTitle>Tren Sentimen Pelanggan</CardTitle>
+            <CardDescription>Skor sentimen dari waktu ke waktu.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ResponsiveContainer width="100%" height={250}>
+              <LineChart data={sentimentData.trend}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                <XAxis
+                  dataKey="timestamp"
+                  tick={{ fontSize: 10 }}
+                  tickFormatter={(v) => new Date(v).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })}
+                />
+                <YAxis domain={[-1, 1]} tick={{ fontSize: 10 }} />
+                <Tooltip labelFormatter={(v) => new Date(v).toLocaleString('id-ID')} />
+                <Line
+                  type="monotone"
+                  dataKey="score"
+                  stroke="#8b5cf6"
+                  strokeWidth={2}
+                  dot={false}
+                />
+              </LineChart>
             </ResponsiveContainer>
           </CardContent>
         </Card>

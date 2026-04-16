@@ -6,7 +6,8 @@ import type {
   CannedResponse, Holiday, PasswordReset,
   SavedView, TicketRelation, CSATResponse, AutoCloseRule,
   ShiftSchedule, BreakLog, ScheduledReport, EmailTemplate,
-  ChatSession, ChatMessage, AuthSession
+  ChatSession, ChatMessage, AuthSession,
+  QualityScorecard, CoachingNote
 } from './types';
 import type { Env } from './core-utils';
 export class AppController extends DurableObject<Env> {
@@ -36,6 +37,8 @@ export class AppController extends DurableObject<Env> {
   private chatSessions = new Map<string, ChatSession>();
   private chatMessages = new Map<string, ChatMessage>();
   private customerSessions = new Map<string, AuthSession>(); // customer refresh tokens
+  private digestQueue = new Map<string, { customerId: string; notifications: { type: string; ticketId: string; title: string; timestamp: string }[] }>(); // key: customerId
+  private coachingNotes = new Map<string, CoachingNote>(); // key: note id
   private loaded = false;
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -67,6 +70,8 @@ export class AppController extends DurableObject<Env> {
       const storedChatSessions = await this.ctx.storage.get<Record<string, ChatSession>>('chatSessions') || {};
       const storedChatMessages = await this.ctx.storage.get<Record<string, ChatMessage>>('chatMessages') || {};
       const storedCustomerSessions = await this.ctx.storage.get<Record<string, AuthSession>>('customerSessions') || {};
+      const storedDigestQueue = await this.ctx.storage.get<Record<string, { customerId: string; notifications: { type: string; ticketId: string; title: string; timestamp: string }[] }>>('digestQueue') || {};
+      const storedCoachingNotes = await this.ctx.storage.get<Record<string, CoachingNote>>('coachingNotes') || {};
       this.sessions = new Map(Object.entries(storedSessions));
       this.tickets = new Map(Object.entries(storedTickets));
       this.users = new Map(Object.entries(storedUsers));
@@ -92,6 +97,8 @@ export class AppController extends DurableObject<Env> {
       this.chatSessions = new Map(Object.entries(storedChatSessions));
       this.chatMessages = new Map(Object.entries(storedChatMessages));
       this.customerSessions = new Map(Object.entries(storedCustomerSessions));
+      this.digestQueue = new Map(Object.entries(storedDigestQueue));
+      this.coachingNotes = new Map(Object.entries(storedCoachingNotes));
       if (this.tickets.size === 0) {
         const mockTickets: Ticket[] = [
           {
@@ -164,6 +171,7 @@ export class AppController extends DurableObject<Env> {
           (ticket as any).aiSuggestedPriority = null;
           (ticket as any).sentimentAlert = null;
           (ticket as any).sentimentScores = [];
+          (ticket as any).qualityScorecard = null;
           migratedTickets = true;
         }
       }
@@ -354,6 +362,127 @@ export class AppController extends DurableObject<Env> {
   private async persistCustomerSessions(): Promise<void> {
     await this.ctx.storage.put('customerSessions', Object.fromEntries(this.customerSessions));
   }
+  private async persistDigestQueue(): Promise<void> {
+    await this.ctx.storage.put('digestQueue', Object.fromEntries(this.digestQueue));
+  }
+  private async persistCoachingNotes(): Promise<void> {
+    await this.ctx.storage.put('coachingNotes', Object.fromEntries(this.coachingNotes));
+  }
+
+  // ─── Quality Management ─────────────────────────────────────────
+
+  async addQualityScorecard(scorecard: QualityScorecard): Promise<void> {
+    await this.ensureLoaded();
+    // Also update the ticket with the scorecard reference
+    const ticket = this.tickets.get(scorecard.ticketId);
+    if (ticket) {
+      ticket.qualityScorecard = scorecard;
+      this.tickets.set(scorecard.ticketId, ticket);
+      await this.persistTickets();
+    }
+  }
+
+  async getQualityScorecard(ticketId: string): Promise<QualityScorecard | null> {
+    await this.ensureLoaded();
+    const ticket = this.tickets.get(ticketId);
+    return ticket?.qualityScorecard || null;
+  }
+
+  async updateQualityScorecard(id: string, updates: Partial<QualityScorecard>): Promise<QualityScorecard | null> {
+    await this.ensureLoaded();
+    // Find the ticket with this scorecard
+    for (const [tid, ticket] of this.tickets) {
+      if (ticket.qualityScorecard?.id === id) {
+        const updated = { ...ticket.qualityScorecard, ...updates };
+        ticket.qualityScorecard = updated;
+        this.tickets.set(tid, ticket);
+        await this.persistTickets();
+        return updated;
+      }
+    }
+    return null;
+  }
+
+  async addCoachingNote(note: CoachingNote): Promise<void> {
+    await this.ensureLoaded();
+    this.coachingNotes.set(note.id, note);
+    await this.persistCoachingNotes();
+  }
+
+  async getCoachingNotes(agentId: string): Promise<CoachingNote[]> {
+    await this.ensureLoaded();
+    return Array.from(this.coachingNotes.values())
+      .filter(n => n.agentId === agentId)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  async getAllCoachingNotes(): Promise<CoachingNote[]> {
+    await this.ensureLoaded();
+    return Array.from(this.coachingNotes.values())
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  async getTicketsForQualityReview(options: {
+    agentId?: string;
+    dateFrom?: string;
+    dateTo?: string;
+    sampleType: 'all' | 'random' | 'flagged';
+  }): Promise<Ticket[]> {
+    await this.ensureLoaded();
+    let tickets = Array.from(this.tickets.values());
+
+    // Filter by agent
+    if (options.agentId) {
+      tickets = tickets.filter(t => t.assignedTo === options.agentId);
+    }
+
+    // Filter by date
+    if (options.dateFrom) tickets = tickets.filter(t => t.createdAt >= options.dateFrom!);
+    if (options.dateTo) tickets = tickets.filter(t => t.createdAt <= options.dateTo!);
+
+    // Only resolved tickets
+    tickets = tickets.filter(t => ['resolved', 'closed'].includes(t.status));
+
+    // Sample
+    if (options.sampleType === 'flagged') {
+      tickets = tickets.filter(t => {
+        // Low CSAT or negative sentiment
+        const hasLowCSAT = false; // Would need CSAT lookup
+        const hasNegativeSentiment = t.sentimentAlert && t.sentimentAlert.score < -0.5;
+        return hasNegativeSentiment;
+      });
+    } else if (options.sampleType === 'random') {
+      const sampleSize = Math.max(1, Math.ceil(tickets.length * 0.1));
+      const shuffled = [...tickets].sort(() => 0.5 - Math.random());
+      tickets = shuffled.slice(0, sampleSize);
+    }
+
+    return tickets.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  // ─── Daily Digest ─────────────────────────────────────────
+  async queueDigestNotification(customerId: string, notification: { type: string; ticketId: string; title: string; timestamp: string }): Promise<void> {
+    await this.ensureLoaded();
+    const existing = this.digestQueue.get(customerId) || { customerId, notifications: [] };
+    existing.notifications.push(notification);
+    this.digestQueue.set(customerId, existing);
+    await this.persistDigestQueue();
+  }
+
+  async getAndClearDigestQueue(customerId: string): Promise<{ type: string; ticketId: string; title: string; timestamp: string }[]> {
+    await this.ensureLoaded();
+    const entry = this.digestQueue.get(customerId);
+    if (!entry) return [];
+    this.digestQueue.delete(customerId);
+    await this.persistDigestQueue();
+    return entry.notifications;
+  }
+
+  async getAllDigestQueues(): Promise<{ customerId: string; notifications: { type: string; ticketId: string; title: string; timestamp: string }[] }[]> {
+    await this.ensureLoaded();
+    return Array.from(this.digestQueue.values());
+  }
+
   async addSession(sessionId: string, title?: string): Promise<void> {
     await this.ensureLoaded();
     const now = Date.now();

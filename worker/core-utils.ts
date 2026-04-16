@@ -21,6 +21,7 @@ export interface Env {
     APP_CONTROLLER: DurableObjectNamespace<AppController>;
     AUTH_CONTROLLER: DurableObjectNamespace<AuthController>;
     ATTACHMENTS_BUCKET: R2Bucket;
+    KNOWLEDGE_BASE_KV: KVNamespace;
 }
 
 /**

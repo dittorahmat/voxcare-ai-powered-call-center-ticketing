@@ -45,6 +45,9 @@ import { AutoCloseRulesSettings } from '@/pages/Settings/AutoCloseRulesSettings'
 import { EmailTemplateSettings } from '@/pages/Settings/EmailTemplateSettings'
 import { ScheduledReportsSettings } from '@/pages/Settings/ScheduledReportsSettings'
 import { NotificationSettings } from '@/pages/Settings/NotificationSettings'
+import { KnowledgeBaseSettings } from '@/pages/Settings/KnowledgeBaseSettings'
+import { WhatsAppSettings } from '@/pages/Settings/WhatsAppSettings'
+import { QualityDashboard } from '@/pages/QualityDashboard'
 import { AnalyticsDashboard } from '@/pages/AnalyticsDashboard'
 import { useTicketStore } from '@/store/ticketStore';
 import { CustomerAuthProvider } from '@/context/CustomerAuthContext';
@@ -55,6 +58,7 @@ import { CustomerDashboardPage } from '@/pages/CustomerDashboardPage';
 import { CustomerTicketsPage, CustomerNewTicketPage, CustomerTicketDetailPage } from '@/pages/CustomerTicketPages';
 import { CustomerProfilePage } from '@/pages/CustomerProfilePage';
 import { CustomerChatPage } from '@/pages/CustomerChatPage';
+import { KnowledgeBasePage, KnowledgeBaseArticlePage } from '@/pages/KnowledgeBasePage';
 
 const queryClient = new QueryClient();
 
@@ -64,6 +68,8 @@ const router = createBrowserRouter([
   { path: "/forgot-password", element: <ForgotPassword /> },
   { path: "/reset-password", element: <ResetPassword /> },
   { path: "/public/ticket/:token", element: <PublicTicketView /> },
+  { path: "/kb", element: <KnowledgeBasePage /> },
+  { path: "/kb/:id", element: <KnowledgeBaseArticlePage /> },
   // Customer portal routes
   {
     path: "/customer",
@@ -106,6 +112,7 @@ const router = createBrowserRouter([
       { path: "admin/shifts", element: <RoleGuard requiredRole="supervisor"><ShiftSchedulePage /></RoleGuard> },
       { path: "audit", element: <RoleGuard requiredRole="supervisor"><AuditLog /></RoleGuard> },
       { path: "analytics", element: <RoleGuard requiredRole="supervisor"><AnalyticsDashboard /></RoleGuard> },
+      { path: "quality", element: <QualityDashboard /> },
       { path: "wallboard", element: <Wallboard /> },
       {
         path: "settings",
@@ -121,6 +128,8 @@ const router = createBrowserRouter([
           { path: "notifications", element: <NotificationSettings /> },
           { path: "email-templates", element: <RoleGuard requiredRole="admin"><EmailTemplateSettings /></RoleGuard> },
           { path: "scheduled-reports", element: <RoleGuard requiredRole="admin"><ScheduledReportsSettings /></RoleGuard> },
+          { path: "knowledge-base", element: <RoleGuard requiredRole="admin"><KnowledgeBaseSettings /></RoleGuard> },
+          { path: "whatsapp", element: <RoleGuard requiredRole="admin"><WhatsAppSettings /></RoleGuard> },
         ],
       },
     ],

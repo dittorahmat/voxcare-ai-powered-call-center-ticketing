@@ -3,7 +3,7 @@ import { Outlet, useLocation, useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Settings as SettingsIcon, User, Shield, Brain, Bell, Users, MessageSquare, Clock, Mail, CalendarClock } from 'lucide-react';
+import { Settings as SettingsIcon, User, Shield, Brain, Bell, Users, MessageSquare, Clock, Mail, CalendarClock, BookOpen, Phone } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const tabs = [
@@ -16,6 +16,8 @@ const tabs = [
   { value: 'notifications', label: 'Notifications', icon: Bell, path: '/settings/notifications', roles: ['agent', 'supervisor', 'admin'] as const },
   { value: 'email-templates', label: 'Email Templates', icon: Mail, path: '/settings/email-templates', roles: ['admin'] as const },
   { value: 'scheduled-reports', label: 'Scheduled Reports', icon: CalendarClock, path: '/settings/scheduled-reports', roles: ['admin'] as const },
+  { value: 'knowledge-base', label: 'Knowledge Base', icon: BookOpen, path: '/settings/knowledge-base', roles: ['admin'] as const },
+  { value: 'whatsapp', label: 'WhatsApp', icon: Phone, path: '/settings/whatsapp', roles: ['admin'] as const },
 ];
 
 export function SettingsLayout() {

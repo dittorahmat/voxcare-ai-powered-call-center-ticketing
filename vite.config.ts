@@ -107,9 +107,13 @@ export default ({ mode }: { mode: string }) => {
   return defineConfig({
     plugins: [react(), cloudflare(), watchDependenciesPlugin(), reloadTriggerPlugin()],
     build: {
-      minify: true,
+      minify: false, // Disable minification to reduce memory usage
       sourcemap: false, // Disable sourcemaps in production to reduce bundle size
       chunkSizeWarningLimit: 1000,
+      // Reduce memory pressure
+      workers: 1,
+      // Use terser for less memory-intensive minification later
+      reportCompressedSize: false,
       rollupOptions: {
         output: {
           sourcemapExcludeSources: true,

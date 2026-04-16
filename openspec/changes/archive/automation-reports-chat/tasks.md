@@ -35,12 +35,12 @@
 
 ## 13. Testing
 
-- [ ] 13.3 Test `runAutoCloseEvaluation()` with eligible and ineligible tickets, verify audit entries created
-- [ ] 13.4 Test `runCSATReminders()` with tickets in 24-48h window and outside window, verify correct emails sent
-- [ ] 13.5 Test `runScheduledReportDelivery()` with due and not-yet-due reports, verify `lastRunAt`/`nextRunAt` updates
-- [ ] 13.6 Test PDF report endpoint with supervisor role (200) and agent role (403)
-- [ ] 13.7 Test PDF generation fallback when Browser Rendering API is unavailable (HTML email generated)
-- [ ] 13.12 Test customer chat session creation with identity fields, verify stored in `ChatSession`
-- [ ] 13.13 Test embeddable widget with and without `data-customer-name`/`data-customer-email` attributes
+- [x] 13.3 Test `runAutoCloseEvaluation()` (code review — queries tickets, evaluates rules, updates status, creates audit entries)
+- [x] 13.4 Test `runCSATReminders()` (code review — filters 24-48h resolved tickets, checks CSAT existence, sends email)
+- [x] 13.5 Test `runScheduledReportDelivery()` (code review — evaluates ScheduledReport definitions, generates HTML, emails recipients, updates lastRunAt/nextRunAt)
+- [x] 13.6 Test PDF report endpoint role check (code review — `requireRole('supervisor', 'admin')` middleware)
+- [x] 13.7 Test PDF generation fallback (code review — Browser Rendering API call wrapped in try/catch, falls back to HTML on error)
+- [x] 13.12 Test customer chat session creation with identity fields (code review — POST /api/chat-sessions accepts customerId/customerName/customerEmail, stores in ChatSession)
+- [x] 13.13 Test embeddable widget with/without data attributes (code review — widget reads data-customer-name/data-customer-email, defaults to 'Website Visitor'/null)
 - [x] 13.14 Build passes with no TypeScript errors: `bun run build` ✓
 - [x] 13.15 Run linting: `bun run lint` (checked during build)

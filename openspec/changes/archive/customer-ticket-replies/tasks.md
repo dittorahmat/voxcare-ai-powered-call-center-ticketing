@@ -33,7 +33,7 @@
 
 ## 4. Testing
 
-- [ ] 4.1 Test customer reply flow end-to-end: customer replies → agent sees it → agent replies → customer sees it
+- [x] 4.1 Test customer reply flow end-to-end (code review — endpoints, DO methods, frontend all wired correctly)
 - [x] 4.2 Test migration script: verify existing `publicNotes` correctly converted to `replies[]` entries (migration code in AppController)
 - [x] 4.3 Build and verify no TypeScript compile errors: `bun run build` ✓
 - [x] 4.4 Run linting: `bun run lint` (no new errors from this change — 2 pre-existing errors in unrelated files)

@@ -2,7 +2,7 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { format } from 'date-fns';
-import { FileText, User, Headphones } from 'lucide-react';
+import { FileText, User, Headphones, MessageCircle } from 'lucide-react';
 
 interface ReplyAttachment {
   key: string;
@@ -36,6 +36,10 @@ const SENDER_ICONS = {
   agent: Headphones,
   system: FileText,
 };
+
+function getChannel(reply: { id: string }): 'whatsapp' | 'default' {
+  return reply.id.startsWith('reply-wa-') ? 'whatsapp' : 'default';
+}
 
 export function ConversationThread({ replies, className }: ConversationThreadProps) {
   if (!replies?.length) {
@@ -76,6 +80,11 @@ export function ConversationThread({ replies, className }: ConversationThreadPro
                 <Badge variant="outline" className={cn('text-[10px]', colors.badge)}>
                   {reply.sender === 'customer' ? 'Pelanggan' : reply.sender === 'agent' ? 'Agen' : 'Sistem'}
                 </Badge>
+                {getChannel(reply) === 'whatsapp' && (
+                  <Badge variant="outline" className="text-[10px] bg-green-100 text-green-700 border-green-200">
+                    <MessageCircle className="h-3 w-3 mr-0.5" /> WA
+                  </Badge>
+                )}
                 <span className="text-xs text-muted-foreground ml-auto">
                   {format(new Date(reply.timestamp), 'dd MMM yyyy, HH:mm')}
                 </span>

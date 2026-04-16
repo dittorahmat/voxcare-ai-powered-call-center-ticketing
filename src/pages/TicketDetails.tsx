@@ -17,6 +17,7 @@ import { TagInput } from '@/components/tickets/TagInput';
 import { RelatedTicketsPanel } from '@/components/tickets/RelatedTicketsPanel';
 import { ActivityFilter } from '@/components/tickets/ActivityFilter';
 import { ConversationThread } from '@/components/tickets/ConversationThread';
+import { QualityScorecardDialog } from '@/components/tickets/QualityScorecardDialog';
 import { apiGetAllTags, apiPostRelation, apiDeleteRelation } from '@/lib/apiClient';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
 import { KeyboardShortcutsHelpDialog } from '@/components/KeyboardShortcutsHelpDialog';
@@ -40,6 +41,15 @@ export function TicketDetails() {
   const [tagSuggestions, setTagSuggestions] = useState<string[]>([]);
   const [helpOpen, setHelpOpen] = useState(false);
   const navigate = useNavigate();
+
+  // AI Suggestion state
+  const [aiSuggestion, setAiSuggestion] = useState<string>('');
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiAccepted, setAiAccepted] = useState(false);
+
+  // Quality scorecard
+  const [scorecardOpen, setScorecardOpen] = useState(false);
+  const [scored, setScored] = useState(false);
 
   useEffect(() => {
     if (ticket) {
@@ -75,6 +85,33 @@ export function TicketDetails() {
         .catch(() => {});
     }
   }, [id]);
+
+  const handleAISuggest = async () => {
+    if (!id) return;
+    setAiLoading(true);
+    setAiSuggestion('');
+    setAiAccepted(false);
+    try {
+      const res = await apiPost(`/api/ai/suggest-response/${id}`, {});
+      if (res.success && res.data?.suggestedResponse) {
+        setAiSuggestion(res.data.suggestedResponse);
+      }
+    } catch {
+      // Error handled by client
+    }
+    setAiLoading(false);
+  };
+
+  const handleUseAISuggestion = () => {
+    setAgentReplyText(aiSuggestion);
+    setAiAccepted(true);
+    setAiSuggestion('');
+  };
+
+  const handleDismissAISuggestion = () => {
+    setAiSuggestion('');
+    setAiAccepted(false);
+  };
 
   const handleAgentReply = async () => {
     if (!agentReplyText.trim() || !id) return;
@@ -190,8 +227,32 @@ export function TicketDetails() {
           <div className="flex items-center gap-3">
             <span className="text-xs font-mono font-bold text-indigo-400">{ticket.id}</span>
             <Badge variant={ticket.status === 'resolved' ? 'success' : 'outline'} className="capitalize">{ticket.status}</Badge>
+            {/* Sentiment Badge */}
+            {ticket.sentimentAlert && (
+              <Badge variant="destructive" className="text-xs flex items-center gap-1">
+                <ShieldAlert className="h-3 w-3" /> Sentimen Negatif
+              </Badge>
+            )}
+            {/* AI Suggestion Badge */}
+            {(ticket.aiSuggestedCategory || ticket.aiSuggestedPriority) && (
+              <Badge variant="secondary" className="text-xs flex items-center gap-1">
+                <Sparkles className="h-3 w-3" /> AI
+              </Badge>
+            )}
           </div>
           <h1 className="text-3xl font-bold tracking-tight mt-1 text-slate-900">{ticket.title}</h1>
+          {/* AI Suggestion Info */}
+          {(ticket.aiSuggestedCategory || ticket.aiSuggestedPriority) && (
+            <div className="flex items-center gap-2 mt-1">
+              <span className="text-xs text-muted-foreground">AI Saran:</span>
+              {ticket.aiSuggestedCategory && (
+                <Badge variant="outline" className="text-[10px]">{ticket.aiSuggestedCategory}</Badge>
+              )}
+              {ticket.aiSuggestedPriority && (
+                <Badge variant="outline" className="text-[10px]">{ticket.aiSuggestedPriority}</Badge>
+              )}
+            </div>
+          )}
         </div>
       </div>
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-10">
@@ -216,6 +277,30 @@ export function TicketDetails() {
                       <ScrollArea className="h-[400px] pr-4">
                         <ConversationThread replies={threadReplies} />
                       </ScrollArea>
+
+                      {/* AI Suggestion Panel */}
+                      {aiSuggestion && (
+                        <Card className="border-indigo-200 bg-indigo-50/50">
+                          <CardHeader className="pb-2">
+                            <CardTitle className="text-sm flex items-center gap-2">
+                              <Sparkles className="h-4 w-4 text-indigo-600" />
+                              Saran Balasan AI
+                            </CardTitle>
+                          </CardHeader>
+                          <CardContent className="space-y-3">
+                            <p className="text-sm whitespace-pre-wrap bg-white p-3 rounded-lg border">{aiSuggestion}</p>
+                            <div className="flex gap-2">
+                              <Button size="sm" onClick={handleUseAISuggestion} className="bg-indigo-600 hover:bg-indigo-700">
+                                <Check className="h-4 w-4 mr-1" /> Gunakan
+                              </Button>
+                              <Button size="sm" variant="outline" onClick={handleDismissAISuggestion}>
+                                Abaikan
+                              </Button>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      )}
+
                       <div className="flex gap-2 pt-2 border-t">
                         <Textarea
                           value={agentReplyText}
@@ -224,9 +309,21 @@ export function TicketDetails() {
                           className="min-h-[60px]"
                           onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); handleAgentReply(); } }}
                         />
-                        <Button onClick={handleAgentReply} disabled={!agentReplyText.trim()} size="sm" className="self-end">
-                          <Send className="h-4 w-4" />
-                        </Button>
+                        <div className="flex flex-col gap-1">
+                          <Button onClick={handleAgentReply} disabled={!agentReplyText.trim()} size="sm">
+                            <Send className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            onClick={handleAISuggest}
+                            disabled={aiLoading}
+                            variant="outline"
+                            size="sm"
+                            className="text-xs"
+                          >
+                            {aiLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
+                            {aiLoading ? '...' : 'AI'}
+                          </Button>
+                        </div>
                       </div>
                     </div>
                   </TabsContent>
@@ -383,6 +480,24 @@ export function TicketDetails() {
                    {ticket.status === 'open' && <Button variant="outline" onClick={() => updateTicketStatus(ticket.id, 'in-progress')} className="w-full h-12 rounded-xl">Assign to Me</Button>}
                  </div>
                </div>
+
+               {user?.role === 'supervisor' || user?.role === 'admin' ? (
+                 <>
+                   <Separator />
+                   <div className="space-y-3">
+                     <p className="text-xs font-bold text-slate-400 uppercase">Quality Review</p>
+                     <Button onClick={() => setScorecardOpen(true)} variant="outline" className="w-full h-12 rounded-xl">
+                       <Star className="size-4 mr-2 text-yellow-500" /> Score Quality
+                     </Button>
+                     {ticket.qualityScorecard && (
+                       <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+                         <p className="text-xs font-medium text-yellow-800">Scored: {ticket.qualityScorecard.overall}/5</p>
+                         <p className="text-[10px] text-yellow-600">by {ticket.qualityScorecard.supervisorId}</p>
+                       </div>
+                     )}
+                   </div>
+                 </>
+               ) : null}
             </CardContent>
           </Card>
           <Card className="border-none shadow-sm ring-1 ring-slate-100">
@@ -553,6 +668,7 @@ function FileUpload({ ticketId }: { ticketId: string }) {
           ))}
         </div>
       )}
+      <QualityScorecardDialog open={scorecardOpen} onOpenChange={setScorecardOpen} ticketId={ticket.id} onScored={() => { setScored(true); }} />
       <KeyboardShortcutsHelpDialog open={helpOpen} onOpenChange={setHelpOpen} />
     </div>
   );

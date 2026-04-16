@@ -162,11 +162,51 @@ export interface Customer {
   verificationToken: string | null;
   verificationTokenExpiry: number | null;
   // Notification preferences
-  notificationPrefs: {
-    events: Record<string, boolean>;
-    frequency: 'instant' | 'daily-digest';
-    digestTime: string; // HH:MM
-  } | null;
+  notificationPrefs: CustomerNotificationPrefs | null;
+}
+
+export interface CustomerNotificationPrefs {
+  events: Record<string, boolean>;
+  frequency: 'instant' | 'daily-digest';
+  digestTime: string; // HH:MM
+}
+
+// ─── Knowledge Base ──────────────────────────────────────────
+export interface KnowledgeArticle {
+  id: string;
+  title: string;
+  content: string;
+  category: string;
+  tags: string[];
+  published: boolean;
+  helpfulCount: number;
+  notHelpfulCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ─── Quality Management ──────────────────────────────────────
+export interface QualityScorecard {
+  id: string;
+  ticketId: string;
+  agentId: string;
+  supervisorId: string;
+  accuracy: number; // 1-5
+  tone: number; // 1-5
+  resolution: number; // 1-5
+  professionalism: number; // 1-5
+  overall: number; // 1-5
+  comments: string | null;
+  createdAt: string;
+}
+
+export interface CoachingNote {
+  id: string;
+  agentId: string;
+  supervisorId: string;
+  ticketId: string | null;
+  text: string;
+  createdAt: string;
 }
 
 export interface AuditEntry {
@@ -304,6 +344,8 @@ export interface Ticket {
   aiSuggestedPriority: string | null;
   sentimentAlert: { score: number; label: string; timestamp: string } | null;
   sentimentScores: { score: number; label: string; timestamp: string; messageId: string }[];
+  // Quality scorecard (per-ticket manual review by supervisor)
+  qualityScorecard: QualityScorecard | null;
 }
 export interface Message {
   role: 'user' | 'assistant' | 'system';

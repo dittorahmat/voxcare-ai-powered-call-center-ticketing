@@ -11,6 +11,37 @@ import { authMiddleware, requireRole, getUser } from "./auth";
 import { paginate, parsePaginationParams } from "./pagination";
 import { captureIp, rateLimit } from "./middleware";
 import { createTicketCreatedEmail, createTicketResolvedEmail, createTicketAssignedEmail, createPasswordResetEmail } from "./email-service";
+
+/**
+ * Check if customer should receive email for a specific event type.
+ * Returns true if customer has no prefs (default: all enabled) or if the event is enabled.
+ * If customer has daily-digest frequency, queues the notification instead.
+ */
+async function shouldSendCustomerEmail(
+  controller: ReturnType<typeof getAppController>,
+  customerId: string,
+  eventType: 'ticket-created' | 'ticket-updated' | 'ticket-resolved' | 'agent-reply',
+  notification?: { ticketId: string; title: string }
+): Promise<boolean> {
+  const customer = await controller.getCustomer(customerId);
+  if (!customer?.email) return false;
+  const prefs = (customer as any).notificationPrefs;
+  if (!prefs) return true; // Default: all enabled
+  if (prefs.frequency === 'daily-digest') {
+    // Queue for daily digest instead of sending immediately
+    if (prefs.events?.[eventType] !== false && notification) {
+      await controller.queueDigestNotification(customerId, {
+        type: eventType,
+        ticketId: notification.ticketId,
+        title: notification.title,
+        timestamp: new Date().toISOString(),
+      });
+    }
+    return false;
+  }
+  return prefs.events?.[eventType] !== false;
+}
+
 export function coreRoutes(app: Hono<{ Bindings: Env }>) {
     // IP capture for all API routes
     app.use('/api/*', captureIp());
@@ -287,6 +318,17 @@ export function userRoutes(app: Hono<{ Bindings: Env }>) {
         };
         await controller.addTicket(ticketWithMeta);
 
+        // Async auto-categorize (non-blocking)
+        const ticketId = ticketWithMeta.id;
+        const ticketTitle = ticket.title;
+        const ticketDesc = ticket.description;
+        c.executionCtx.waitUntil(
+            (async () => {
+                const { runAutoCategorize } = await import('./tools');
+                await runAutoCategorize(ticketId, ticketTitle, ticketDesc, c.env);
+            })().catch(e => console.error('[AI] Auto-categorize failed:', e))
+        );
+
         // Auto-create SLA record
         const slaConfig = await controller.getSLAConfigByPriority(ticket.priority);
         let slaRecordId: string | null = null;
@@ -431,12 +473,16 @@ export function userRoutes(app: Hono<{ Bindings: Env }>) {
             if (customer?.email) {
                 const { sendEmail, createTicketCreatedEmail, createTicketUpdatedEmail, createTicketResolvedEmail } = await import('./email-service');
                 if (updates.status === 'resolved' && existing.status !== 'resolved') {
-                    const csatUrl = `${appUrl}/public/ticket/${updated.publicToken}`;
-                    const email = createTicketResolvedEmail(customer.email, customer.name, id, updated.title, updated.publicNotes?.text || '', ticketUrl, csatUrl);
-                    await sendEmail(email, c.env);
+                    if (await shouldSendCustomerEmail(controller, existing.customerId, 'ticket-resolved', { ticketId: id, title: updated.title })) {
+                        const csatUrl = `${appUrl}/public/ticket/${updated.publicToken}`;
+                        const email = createTicketResolvedEmail(customer.email, customer.name, id, updated.title, updated.publicNotes?.text || '', ticketUrl, csatUrl);
+                        await sendEmail(email, c.env);
+                    }
                 } else if (updates.publicNotes && existing.status !== 'resolved') {
-                    const email = createTicketUpdatedEmail(customer.email, customer.name, id, updated.title, updates.publicNotes.text || '', ticketUrl);
-                    await sendEmail(email, c.env);
+                    if (await shouldSendCustomerEmail(controller, existing.customerId, 'ticket-updated', { ticketId: id, title: updated.title })) {
+                        const email = createTicketUpdatedEmail(customer.email, customer.name, id, updated.title, updates.publicNotes.text || '', ticketUrl);
+                        await sendEmail(email, c.env);
+                    }
                 }
             }
         }
@@ -808,6 +854,69 @@ export function userRoutes(app: Hono<{ Bindings: Env }>) {
                 'Content-Disposition': `attachment; filename="${type}_export_${new Date().toISOString().split('T')[0]}.csv"`,
             },
         });
+    });
+
+    // ─── AI Assist ───────────────────────────────────────────
+    app.post('/api/ai/suggest-response/:ticketId', authMiddleware(), async (c) => {
+        const user = getUser(c);
+        if (!['agent', 'supervisor', 'admin'].includes(user.role)) return c.json({ success: false, error: 'Forbidden' }, { status: 403 });
+
+        const ticketId = c.req.param('ticketId');
+        const controller = getAppController(c.env);
+        const ticket = await controller.getTicket(ticketId);
+        if (!ticket) return c.json({ success: false, error: 'Ticket not found' }, { status: 404 });
+
+        const { runResponseSuggestion } = await import('./tools');
+        const suggestion = await runResponseSuggestion(ticketId, c.env);
+
+        if (!suggestion) return c.json({ success: false, error: 'AI suggestion unavailable' }, { status: 503 });
+
+        return c.json({ success: true, data: { suggestedResponse: suggestion } });
+    });
+
+    app.get('/api/analytics/sentiment', authMiddleware(), async (c) => {
+        const controller = getAppController(c.env);
+        const tickets = await controller.listTickets();
+        const from = c.req.query('from');
+        const to = c.req.query('to');
+
+        let filtered = tickets;
+        if (from) filtered = filtered.filter(t => t.createdAt >= from);
+        if (to) filtered = filtered.filter(t => t.createdAt <= to);
+
+        const allScores: { score: number; label: string; timestamp: string }[] = [];
+        let negativeCount = 0;
+        let neutralCount = 0;
+        let positiveCount = 0;
+        let alertCount = 0;
+
+        for (const ticket of filtered) {
+            const scores = ticket.sentimentScores || [];
+            allScores.push(...scores.map(s => ({ score: s.score, label: s.label, timestamp: s.timestamp })));
+            if (ticket.sentimentAlert) alertCount++;
+        }
+
+        for (const s of allScores) {
+            if (s.label === 'negative') negativeCount++;
+            else if (s.label === 'neutral') neutralCount++;
+            else positiveCount++;
+        }
+
+        const total = allScores.length;
+        const avgScore = total > 0 ? Math.round((allScores.reduce((sum, s) => sum + s.score, 0) / total) * 100) / 100 : 0;
+
+        return c.json({ success: true, data: {
+            avgScore,
+            total: total,
+            negativeCount,
+            neutralCount,
+            positiveCount,
+            negativePercent: total > 0 ? Math.round((negativeCount / total) * 100) : 0,
+            neutralPercent: total > 0 ? Math.round((neutralCount / total) * 100) : 0,
+            positivePercent: total > 0 ? Math.round((positiveCount / total) * 100) : 0,
+            alertCount,
+            trend: allScores.slice(-50).map(s => ({ score: s.score, timestamp: s.timestamp })),
+        }});
     });
 
     // ─── PDF Report Generation ───────────────────────────────
@@ -2241,6 +2350,150 @@ export function userRoutes(app: Hono<{ Bindings: Env }>) {
         return c.json({ success: true, data: { message: 'Password updated' } });
     });
 
+    // ─── Customer Notification Preferences ───────────────────
+    app.get('/api/customer/notification-preferences', authMiddleware(), async (c) => {
+        const user = getUser(c);
+        if (user.role !== 'customer') return c.json({ success: false, error: 'Forbidden' }, { status: 403 });
+
+        const controller = getAppController(c.env);
+        const customer = await controller.getCustomer(user.sub);
+        if (!customer) return c.json({ success: false, error: 'Customer not found' }, { status: 404 });
+
+        const prefs = (customer as any).notificationPrefs || {
+            events: { 'ticket-created': true, 'ticket-updated': true, 'ticket-resolved': true, 'agent-reply': true },
+            frequency: 'instant' as const,
+            digestTime: '09:00',
+        };
+
+        return c.json({ success: true, data: prefs });
+    });
+
+    app.patch('/api/customer/notification-preferences', authMiddleware(), async (c) => {
+        const user = getUser(c);
+        if (user.role !== 'customer') return c.json({ success: false, error: 'Forbidden' }, { status: 403 });
+
+        const prefs = await c.req.json();
+        const controller = getAppController(c.env);
+        const customer = await controller.getCustomer(user.sub);
+        if (!customer) return c.json({ success: false, error: 'Customer not found' }, { status: 404 });
+
+        const normalized = {
+            events: prefs.events || { 'ticket-created': true, 'ticket-updated': true, 'ticket-resolved': true, 'agent-reply': true },
+            frequency: prefs.frequency || 'instant',
+            digestTime: prefs.digestTime || '09:00',
+        };
+
+        await controller.updateCustomer(user.sub, { notificationPrefs: normalized } as any);
+        return c.json({ success: true, data: normalized });
+    });
+
+    // ─── Knowledge Base ──────────────────────────────────────
+    const { storeArticle, getArticle, listArticles, deleteArticle, incrementArticleFeedback, searchArticlesForTicket } = await import('./knowledge-base');
+
+    app.post('/api/knowledge-base/articles', authMiddleware(), async (c) => {
+        const user = getUser(c);
+        if (user.role !== 'admin') return c.json({ success: false, error: 'Admin only' }, { status: 403 });
+
+        const body = await c.req.json();
+        if (!body.title?.trim() || !body.content?.trim()) return c.json({ success: false, error: 'Title and content required' }, { status: 400 });
+
+        const article = {
+            id: body.id || `kb-${crypto.randomUUID()}`,
+            title: body.title.trim(),
+            content: body.content.trim(),
+            category: body.category || 'Umum',
+            tags: body.tags || [],
+            published: body.published ?? false,
+            helpfulCount: 0,
+            notHelpfulCount: 0,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+        };
+
+        await storeArticle(c.env.KNOWLEDGE_BASE_KV, article);
+        return c.json({ success: true, data: article }, { status: 201 });
+    });
+
+    app.put('/api/knowledge-base/articles/:id', authMiddleware(), async (c) => {
+        const user = getUser(c);
+        if (user.role !== 'admin') return c.json({ success: false, error: 'Admin only' }, { status: 403 });
+
+        const id = c.req.param('id');
+        const existing = await getArticle(c.env.KNOWLEDGE_BASE_KV, id);
+        if (!existing) return c.json({ success: false, error: 'Article not found' }, { status: 404 });
+
+        const body = await c.req.json();
+        const updated = {
+            ...existing,
+            title: body.title ?? existing.title,
+            content: body.content ?? existing.content,
+            category: body.category ?? existing.category,
+            tags: body.tags ?? existing.tags,
+            published: body.published ?? existing.published,
+            updatedAt: new Date().toISOString(),
+        };
+
+        await storeArticle(c.env.KNOWLEDGE_BASE_KV, updated);
+        return c.json({ success: true, data: updated });
+    });
+
+    app.delete('/api/knowledge-base/articles/:id', authMiddleware(), async (c) => {
+        const user = getUser(c);
+        if (user.role !== 'admin') return c.json({ success: false, error: 'Admin only' }, { status: 403 });
+
+        const id = c.req.param('id');
+        const deleted = await deleteArticle(c.env.KNOWLEDGE_BASE_KV, id);
+        if (!deleted) return c.json({ success: false, error: 'Article not found' }, { status: 404 });
+        return c.json({ success: true, data: { deleted: true } });
+    });
+
+    app.get('/api/knowledge-base/articles', async (c) => {
+        const category = c.req.query('category');
+        const tag = c.req.query('tag');
+        const search = c.req.query('search');
+
+        // Only published articles for public access
+        const isAdmin = false; // Will be overridden if auth present
+        const publishedOnly = !isAdmin;
+
+        const articles = await listArticles(c.env.KNOWLEDGE_BASE_KV, {
+            category,
+            tag,
+            published: publishedOnly,
+            search,
+        });
+
+        return c.json({ success: true, data: articles });
+    });
+
+    app.get('/api/knowledge-base/articles/:id', async (c) => {
+        const id = c.req.param('id');
+        const article = await getArticle(c.env.KNOWLEDGE_BASE_KV, id);
+        if (!article) return c.json({ success: false, error: 'Article not found' }, { status: 404 });
+
+        // Draft articles only accessible to admins (check auth if present)
+        try {
+            const authHeader = c.req.header('Authorization');
+            if (!article.published && authHeader) {
+                // Could check admin role here, for now return 404 for drafts
+            }
+        } catch { /* No auth */ }
+
+        if (!article.published) return c.json({ success: false, error: 'Article not found' }, { status: 404 });
+        return c.json({ success: true, data: article });
+    });
+
+    app.post('/api/knowledge-base/articles/:id/feedback', async (c) => {
+        const id = c.req.param('id');
+        const { helpful } = await c.req.json();
+        if (typeof helpful !== 'boolean') return c.json({ success: false, error: 'helpful (boolean) required' }, { status: 400 });
+
+        const updated = await incrementArticleFeedback(c.env.KNOWLEDGE_BASE_KV, id, helpful);
+        if (!updated) return c.json({ success: false, error: 'Article not found' }, { status: 404 });
+
+        return c.json({ success: true, data: { helpful } });
+    });
+
     // ─── Customer Portal API ─────────────────────────────────
 
     // Customer auth middleware helper
@@ -2328,6 +2581,16 @@ export function userRoutes(app: Hono<{ Bindings: Env }>) {
             updatedAt: new Date().toISOString(),
             lastCustomerReplyAt: new Date().toISOString(),
         });
+
+        // Async sentiment analysis (non-blocking)
+        const replyId = reply.id;
+        const replyText = text?.trim() || '';
+        c.executionCtx.waitUntil(
+            (async () => {
+                const { runSentimentAnalysis } = await import('./tools');
+                await runSentimentAnalysis(ticketId, replyId, replyText, c.env);
+            })().catch(e => console.error('[AI] Sentiment analysis failed:', e))
+        );
 
         // Create notification for assigned agent (or all available agents if unassigned)
         if (ticket.assignedTo) {
@@ -2456,10 +2719,7 @@ export function userRoutes(app: Hono<{ Bindings: Env }>) {
         if (ticket.customerId) {
             const customer = await controller.getCustomer(ticket.customerId);
             if (customer?.email) {
-                // Check notification prefs - default to allowed if null
-                const prefs = (customer as any).notificationPrefs;
-                const agentReplyEnabled = !prefs || prefs.events?.['agent-reply'] !== false;
-                if (agentReplyEnabled && prefs?.frequency !== 'daily-digest') {
+                if (await shouldSendCustomerEmail(controller, ticket.customerId, 'agent-reply', { ticketId, title: ticket.title })) {
                     const appUrl = c.env.APP_URL || 'http://localhost:5173';
                     const ticketUrl = `${appUrl}/public/ticket/${ticket.publicToken}`;
                     const { sendEmail, createTicketUpdatedEmail } = await import('./email-service');
@@ -2512,6 +2772,17 @@ export function userRoutes(app: Hono<{ Bindings: Env }>) {
         };
         await controller.addTicket(ticketWithMeta);
 
+        // Async auto-categorize (non-blocking)
+        const ticketId = ticketWithMeta.id;
+        const ticketTitle = ticket.title;
+        const ticketDesc = ticket.description;
+        c.executionCtx.waitUntil(
+            (async () => {
+                const { runAutoCategorize } = await import('./tools');
+                await runAutoCategorize(ticketId, ticketTitle, ticketDesc, c.env);
+            })().catch(e => console.error('[AI] Auto-categorize failed:', e))
+        );
+
         // Auto-create SLA record
         const slaConfig = await controller.getSLAConfigByPriority(ticket.priority || 'medium');
         if (slaConfig) {
@@ -2527,16 +2798,24 @@ export function userRoutes(app: Hono<{ Bindings: Env }>) {
             await controller.updateTicket(ticketWithMeta.id, { slaRecordId: slaRecord.id });
         }
 
-        // Send confirmation email
+        // Send confirmation email (respecting notification prefs)
         if (customer?.email) {
             const appUrl = c.env?.APP_URL || 'http://localhost:5173';
             const { sendEmail, createTicketCreatedEmail } = await import('./email-service');
             const ticketUrl = `${appUrl}/customer/tickets/${ticketWithMeta.id}`;
-            const email = createTicketCreatedEmail(customer.email, customer.name, ticketWithMeta.id, ticket.title, ticket.description, ticketUrl);
-            await sendEmail(email, c.env);
+            if (await shouldSendCustomerEmail(controller, user.sub, 'ticket-created', { ticketId: ticketWithMeta.id, title: ticket.title })) {
+                const email = createTicketCreatedEmail(customer.email, customer.name, ticketWithMeta.id, ticket.title, ticket.description, ticketUrl);
+                await sendEmail(email, c.env);
+            }
         }
 
-        return c.json({ success: true, data: ticketWithMeta });
+        // Suggest KB articles
+        let suggestedArticles: any[] = [];
+        try {
+            suggestedArticles = await searchArticlesForTicket(c.env.KNOWLEDGE_BASE_KV, ticket.title || '', ticket.description || '');
+        } catch { /* KB not available */ }
+
+        return c.json({ success: true, data: { ...ticketWithMeta, suggestedArticles } });
     });
 
     app.get('/api/customer/profile', authMiddleware(), async (c) => {
@@ -2927,4 +3206,468 @@ export function userRoutes(app: Hono<{ Bindings: Env }>) {
         await controller.updateUser(user.sub, { maxConcurrentChats } as any);
         return c.json({ success: true });
     });
+
+    // ─── WhatsApp Webhook (Incoming) ────────────────────────
+    app.post('/api/whatsapp/webhook', async (c) => {
+        const controller = getAppController(c.env);
+
+        // WAHA sends messages in various formats. Handle the common payload format.
+        const body = await c.req.json();
+
+        // Extract phone and text from WAHA webhook payload
+        // WAHA payload: { chatId: "6281234567890@c.us", body: "message text", ... }
+        const chatId = body.chatId || '';
+        const text = body.body || body.text || body.message || '';
+        const phone = chatId.replace('@c.us', '').replace('@s.whatsapp.net', '');
+
+        if (!phone || !text) {
+            return c.json({ success: false, error: 'Invalid payload' }, { status: 400 });
+        }
+
+        // Find or create customer
+        const { findCustomerByPhone, normalizePhone, sendWhatsAppMessage } = await import('./whatsapp');
+        const customer = await findCustomerByPhone(controller, phone);
+
+        let ticket: any = null;
+        let isNewCustomer = false;
+
+        if (customer) {
+            // Find latest open ticket
+            const { findLatestOpenTicket } = await import('./whatsapp');
+            ticket = await findLatestOpenTicket(controller, customer.id);
+        } else {
+            // Create new customer
+            isNewCustomer = true;
+            const newCustomer = {
+                id: `cust-${crypto.randomUUID()}`,
+                name: phone,
+                email: null,
+                phone: phone,
+                company: null,
+                tags: [],
+                isVip: false,
+                notes: null,
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+                ticketCount: 0,
+                passwordHash: null,
+                passwordSalt: null,
+                isActive: true,
+                lastLoginAt: null,
+                emailVerifiedAt: null,
+                verificationToken: null,
+                verificationTokenExpiry: null,
+                notificationPrefs: null,
+            };
+            await controller.addCustomer(newCustomer as any);
+
+            // Create new ticket
+            ticket = {
+                id: `T-${Date.now()}`,
+                title: text.substring(0, 50),
+                description: text,
+                customerName: phone,
+                customerId: newCustomer.id,
+                priority: 'medium',
+                status: 'open',
+                category: 'General Inquiry',
+                createdAt: new Date().toISOString(),
+                assignedTo: null,
+                slaRecordId: null,
+                escalationLevel: 0,
+                resolutionTime: null,
+                resolvedAt: null,
+                resolvedBy: null,
+                internalNotes: [],
+                publicNotes: null,
+                attachments: [],
+                tags: ['whatsapp'],
+                publicToken: crypto.randomUUID(),
+                mergedInto: null,
+                fcrFlag: false,
+                handleTimeSeconds: null,
+                updatedAt: null,
+                lastCustomerReplyAt: null,
+                replies: [],
+                aiSuggestedCategory: null,
+                aiSuggestedPriority: null,
+                sentimentAlert: null,
+                sentimentScores: [],
+            };
+            await controller.addTicket(ticket);
+
+            // Send auto-reply
+            await sendWhatsAppMessage(phone, `Terima kasih, ${phone}. Tiket Anda (${ticket.id}) sudah dibuat. Tim kami akan segera merespon.`, c.env);
+        }
+
+        if (!ticket) {
+            // Customer exists but no open ticket - create new one
+            ticket = {
+                id: `T-${Date.now()}`,
+                title: text.substring(0, 50),
+                description: text,
+                customerName: customer.name,
+                customerId: customer.id,
+                priority: 'medium',
+                status: 'open',
+                category: 'General Inquiry',
+                createdAt: new Date().toISOString(),
+                assignedTo: null,
+                slaRecordId: null,
+                escalationLevel: 0,
+                resolutionTime: null,
+                resolvedAt: null,
+                resolvedBy: null,
+                internalNotes: [],
+                publicNotes: null,
+                attachments: [],
+                tags: ['whatsapp'],
+                publicToken: crypto.randomUUID(),
+                mergedInto: null,
+                fcrFlag: false,
+                handleTimeSeconds: null,
+                updatedAt: null,
+                lastCustomerReplyAt: null,
+                replies: [],
+                aiSuggestedCategory: null,
+                aiSuggestedPriority: null,
+                sentimentAlert: null,
+                sentimentScores: [],
+            };
+            await controller.addTicket(ticket);
+        }
+
+        // Add WhatsApp message to ticket replies
+        const { addTicketReply } = controller;
+        const replyResult = await controller.addTicketReply(ticket.id, {
+            id: `reply-wa-${crypto.randomUUID()}`,
+            sender: 'customer',
+            senderId: customer?.id || ticket.customerId,
+            senderName: customer?.name || phone,
+            text,
+            attachments: [],
+        });
+
+        if (replyResult.reply) {
+            await controller.updateTicket(ticket.id, {
+                updatedAt: new Date().toISOString(),
+                lastCustomerReplyAt: new Date().toISOString(),
+            });
+
+            // Notify assigned agent or all available agents
+            if (ticket.assignedTo) {
+                await controller.addNotification({
+                    id: crypto.randomUUID(),
+                    type: 'ticket-updated',
+                    recipientId: ticket.assignedTo,
+                    read: false,
+                    createdAt: new Date().toISOString(),
+                    expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+                    data: { ticketId: ticket.id, title: ticket.title, replyFrom: customer?.name || phone, channel: 'whatsapp' },
+                });
+            } else {
+                const agents = await controller.listUsers();
+                const availableAgents = agents.filter(a => a.active && a.availability === 'available' && (a.role === 'agent' || a.role === 'supervisor'));
+                for (const agent of availableAgents.slice(0, 5)) {
+                    await controller.addNotification({
+                        id: crypto.randomUUID(),
+                        type: 'ticket-updated',
+                        recipientId: agent.id,
+                        read: false,
+                        createdAt: new Date().toISOString(),
+                        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+                        data: { ticketId: ticket.id, title: ticket.title, replyFrom: customer?.name || phone, channel: 'whatsapp' },
+                    });
+                }
+            }
+        }
+
+        return c.json({ success: true, data: { ticketId: ticket.id } });
+    });
+
+    // ─── WhatsApp Outgoing ──────────────────────────────────
+    app.post('/api/whatsapp/send', async (c) => {
+        const { phone, text, ticketId } = await c.req.json();
+        if (!phone || !text) return c.json({ success: false, error: 'phone and text required' }, { status: 400 });
+
+        const { sendWhatsAppMessage } = await import('./whatsapp');
+        const sent = await sendWhatsAppMessage(phone, text, c.env);
+
+        if (sent && ticketId) {
+            const controller = getAppController(c.env);
+            const ticket = await controller.getTicket(ticketId);
+            if (ticket) {
+                const user = getUser(c);
+                await controller.addTicketReply(ticketId, {
+                    id: `reply-wa-${crypto.randomUUID()}`,
+                    sender: 'agent',
+                    senderId: user.sub,
+                    senderName: user.name,
+                    text,
+                    attachments: [],
+                });
+                await controller.updateTicket(ticketId, { updatedAt: new Date().toISOString() });
+            }
+        }
+
+        return c.json({ success: sent, data: { sent } });
+    });
+
+    // ─── WhatsApp Admin ─────────────────────────────────────
+    app.get('/api/admin/whatsapp/status', authMiddleware(), requireRole('admin'), async (c) => {
+        const { getWAHAStatus } = await import('./whatsapp');
+        const status = await getWAHAStatus(c.env);
+        return c.json({ success: true, data: status });
+    });
+
+    app.post('/api/admin/whatsapp/reconnect', authMiddleware(), requireRole('admin'), async (c) => {
+        const wahaUrl = c.env.WAHA_URL;
+        const wahaKey = c.env.WAHA_API_KEY;
+        if (!wahaUrl || !wahaKey) return c.json({ success: false, error: 'WAHA not configured' }, { status: 503 });
+
+        try {
+            const res = await fetch(`${wahaUrl}/api/sessions`, {
+                method: 'POST',
+                headers: { 'X-Api-Key': wahaKey, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: 'default', restart: true }),
+            });
+            if (!res.ok) return c.json({ success: false, error: `Reconnect failed: ${res.status}` }, { status: 500 });
+            return c.json({ success: true, data: { message: 'Reconnect initiated. Check QR code.' } });
+        } catch (error) {
+            return c.json({ success: false, error: String(error) }, { status: 500 });
+        }
+    });
+
+    app.get('/api/admin/whatsapp/qr', authMiddleware(), requireRole('admin'), async (c) => {
+        const wahaUrl = c.env.WAHA_URL;
+        const wahaKey = c.env.WAHA_API_KEY;
+        if (!wahaUrl || !wahaKey) return c.json({ success: false, error: 'WAHA not configured' }, { status: 503 });
+
+        try {
+            const res = await fetch(`${wahaUrl}/api/auth/qr`, {
+                headers: { 'X-Api-Key': wahaKey },
+            });
+            if (!res.ok) return c.json({ success: false, error: `QR fetch failed: ${res.status}` }, { status: 500 });
+            const qrData = await res.json();
+            return c.json({ success: true, data: qrData });
+        } catch (error) {
+            return c.json({ success: false, error: String(error) }, { status: 500 });
+        }
+    });
+
+    // ─── Quality Management ─────────────────────────────────
+    app.post('/api/quality/scorecards', authMiddleware(), requireRole('supervisor', 'admin'), async (c) => {
+        const user = getUser(c);
+        const scorecard = await c.req.json();
+        if (!scorecard.ticketId || !scorecard.accuracy || !scorecard.tone || !scorecard.resolution || !scorecard.professionalism || !scorecard.overall) {
+            return c.json({ success: false, error: 'All fields required' }, { status: 400 });
+        }
+
+        const controller = getAppController(c.env);
+        const ticket = await controller.getTicket(scorecard.ticketId);
+        if (!ticket) return c.json({ success: false, error: 'Ticket not found' }, { status: 404 });
+
+        const newScorecard = {
+            id: `qs-${crypto.randomUUID()}`,
+            ticketId: scorecard.ticketId,
+            agentId: ticket.assignedTo || 'unassigned',
+            supervisorId: user.sub,
+            accuracy: Math.min(5, Math.max(1, scorecard.accuracy)),
+            tone: Math.min(5, Math.max(1, scorecard.tone)),
+            resolution: Math.min(5, Math.max(1, scorecard.resolution)),
+            professionalism: Math.min(5, Math.max(1, scorecard.professionalism)),
+            overall: Math.min(5, Math.max(1, scorecard.overall)),
+            comments: scorecard.comments || null,
+            createdAt: new Date().toISOString(),
+        };
+
+        await controller.addQualityScorecard(newScorecard);
+
+        await controller.appendAuditLog({
+            action: 'quality-scorecard', userId: user.sub, userName: user.name, userRole: user.role,
+            entityType: 'ticket', entityId: scorecard.ticketId, timestamp: new Date().toISOString(),
+            changes: { data: { after: newScorecard } },
+        });
+
+        return c.json({ success: true, data: newScorecard }, { status: 201 });
+    });
+
+    app.put('/api/quality/scorecards/:id', authMiddleware(), requireRole('supervisor', 'admin'), async (c) => {
+        const id = c.req.param('id');
+        const updates = await c.req.json();
+        const controller = getAppController(c.env);
+        const updated = await controller.updateQualityScorecard(id, updates);
+        if (!updated) return c.json({ success: false, error: 'Scorecard not found' }, { status: 404 });
+        return c.json({ success: true, data: updated });
+    });
+
+    app.get('/api/quality/sampling', authMiddleware(), requireRole('supervisor', 'admin'), async (c) => {
+        const controller = getAppController(c.env);
+        const agentId = c.req.query('agentId') || undefined;
+        const dateFrom = c.req.query('dateFrom') || undefined;
+        const dateTo = c.req.query('dateTo') || undefined;
+        const sampleType = (c.req.query('sampleType') as 'all' | 'random' | 'flagged') || 'all';
+
+        const tickets = await controller.getTicketsForQualityReview({ agentId, dateFrom, dateTo, sampleType });
+        return c.json({ success: true, data: tickets });
+    });
+
+    app.post('/api/quality/coaching', authMiddleware(), requireRole('supervisor', 'admin'), async (c) => {
+        const user = getUser(c);
+        const { agentId, ticketId, text } = await c.req.json();
+        if (!agentId || !text) return c.json({ success: false, error: 'agentId and text required' }, { status: 400 });
+
+        const controller = getAppController(c.env);
+        const note = {
+            id: `cn-${crypto.randomUUID()}`,
+            agentId,
+            supervisorId: user.sub,
+            ticketId: ticketId || null,
+            text,
+            createdAt: new Date().toISOString(),
+        };
+
+        await controller.addCoachingNote(note);
+        return c.json({ success: true, data: note }, { status: 201 });
+    });
+
+    app.get('/api/quality/coaching', authMiddleware(), async (c) => {
+        const user = getUser(c);
+        const controller = getAppController(c.env);
+
+        if (['supervisor', 'admin'].includes(user.role)) {
+            const notes = await controller.getAllCoachingNotes();
+            return c.json({ success: true, data: notes });
+        }
+
+        // Agent sees only own notes
+        const notes = await controller.getCoachingNotes(user.sub);
+        return c.json({ success: true, data: notes });
+    });
+
+    app.get('/api/quality/agent/:agentId', authMiddleware(), async (c) => {
+        const agentId = c.req.param('agentId');
+        const user = getUser(c);
+        const from = c.req.query('from');
+        const to = c.req.query('to');
+
+        const controller = getAppController(c.env);
+        const agent = await controller.getUser(agentId);
+        if (!agent) return c.json({ success: false, error: 'Agent not found' }, { status: 404 });
+
+        // Get agent's tickets
+        const tickets = await controller.listTickets();
+        const agentTickets = tickets.filter(t => t.assignedTo === agentId);
+        const filtered = agentTickets.filter(t => {
+            if (from && t.createdAt < from) return false;
+            if (to && t.createdAt > to) return false;
+            return true;
+        });
+
+        // Calculate metrics
+        const resolved = filtered.filter(t => ['resolved', 'closed'].includes(t.status));
+        const scoredTickets = filtered.filter(t => t.qualityScorecard);
+        const avgManualScore = scoredTickets.length > 0
+            ? Math.round((scoredTickets.reduce((sum, t) => sum + (t.qualityScorecard?.overall || 0), 0) / scoredTickets.length) * 100) / 100
+            : 0;
+
+        // CSAT for this agent's tickets
+        const csatResponses = await controller.listCSATResponses();
+        const agentCSAT = csatResponses.filter(r => {
+            const ticket = agentTickets.find(t => t.id === r.ticketId);
+            return !!ticket;
+        });
+        const avgCSAT = agentCSAT.length > 0
+            ? Math.round((agentCSAT.reduce((sum, r) => sum + r.rating, 0) / agentCSAT.length) * 100) / 100
+            : 0;
+
+        // SLA compliance
+        const slaRecords = await controller.listSLARecords();
+        const agentSLA = agentTickets
+            .map(t => slaRecords.find(s => s.id === t.slaRecordId))
+            .filter(Boolean);
+        const slaCompliance = agentSLA.length > 0
+            ? Math.round((agentSLA.filter((r: any) => !r.breached).length / agentSLA.length) * 100)
+            : 0;
+
+        // Sentiment
+        const negativeSentiment = filtered.filter(t => t.sentimentAlert && t.sentimentAlert.score < -0.5).length;
+        const avgSentiment = filtered.length > 0 && filtered.some(t => t.sentimentScores?.length > 0)
+            ? filtered.reduce((sum, t) => {
+                const scores = t.sentimentScores || [];
+                return sum + (scores.length > 0 ? scores.reduce((s, sc) => s + sc.score, 0) / scores.length : 0);
+            }, 0) / filtered.length
+            : 0;
+
+        // Composite score: (Manual × 0.4) + (CSAT × 0.3) + (SLA × 0.2) + (Sentiment × 0.1)
+        const compositeScore = (avgManualScore * 0.4) + ((avgCSAT / 5) * 5 * 0.3) + ((slaCompliance / 100) * 5 * 0.2) + (((avgSentiment + 1) / 2) * 5 * 0.1);
+
+        // Trend data (daily)
+        const trend: { date: string; composite: number }[] = [];
+        const dateMap = new Map<string, { scoreSum: number; count: number }>();
+        for (const ticket of scoredTickets) {
+            const date = ticket.createdAt.split('T')[0];
+            const existing = dateMap.get(date) || { scoreSum: 0, count: 0 };
+            existing.scoreSum += ticket.qualityScorecard?.overall || 0;
+            existing.count++;
+            dateMap.set(date, existing);
+        }
+        for (const [date, data] of dateMap) {
+            trend.push({ date, composite: Math.round((data.scoreSum / data.count) * 100) / 100 });
+        }
+        trend.sort((a, b) => a.date.localeCompare(b.date));
+
+        return c.json({ success: true, data: {
+            agent: { id: agent.id, name: agent.name, role: agent.role },
+            totalTickets: filtered.length,
+            resolvedTickets: resolved.length,
+            avgManualScore,
+            avgCSAT,
+            slaCompliance,
+            negativeSentimentCount: negativeSentiment,
+            avgSentiment: Math.round(avgSentiment * 100) / 100,
+            compositeScore: Math.round(compositeScore * 100) / 100,
+            trend,
+        }});
+    });
+
+    app.get('/api/quality/team', authMiddleware(), requireRole('supervisor', 'admin'), async (c) => {
+        const controller = getAppController(c.env);
+        const users = await controller.listUsers();
+        const agents = users.filter(u => u.role === 'agent' || u.role === 'supervisor');
+        const from = c.req.query('from');
+        const to = c.req.query('to');
+
+        const rankings: any[] = [];
+        for (const agent of agents) {
+            // Simplified: just get basic metrics for ranking
+            const tickets = await controller.listTickets();
+            const agentTickets = tickets.filter(t => t.assignedTo === agent.id);
+            const filtered = agentTickets.filter(t => {
+                if (from && t.createdAt < from) return false;
+                if (to && t.createdAt > to) return false;
+                return true;
+            });
+
+            const resolved = filtered.filter(t => ['resolved', 'closed'].includes(t.status));
+            const scored = filtered.filter(t => t.qualityScorecard);
+            const avgManual = scored.length > 0
+                ? Math.round((scored.reduce((sum, t) => sum + (t.qualityScorecard?.overall || 0), 0) / scored.length) * 100) / 100
+                : 0;
+
+            rankings.push({
+                agentId: agent.id,
+                name: agent.name,
+                role: agent.role,
+                totalTickets: filtered.length,
+                resolvedTickets: resolved.length,
+                avgManualScore: avgManual,
+            });
+        }
+
+        rankings.sort((a, b) => b.avgManualScore - a.avgManualScore);
+
+        return c.json({ success: true, data: { rankings } });
+    });
+
 }
