@@ -69,8 +69,8 @@
 	"kv_namespaces": [
 		{
 			"binding": "KNOWLEDGE_BASE_KV",
-			"id": "your-kv-namespace-id",
-			"preview_id": "your-preview-kv-namespace-id"
+			"id": "79b0ef0cde60409fb52f967d61ea07ec",
+			"preview_id": "79b0ef0cde60409fb52f967d61ea07ec"
 		}
 	],
 	"triggers": {
