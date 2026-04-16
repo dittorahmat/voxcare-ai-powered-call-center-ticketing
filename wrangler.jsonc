@@ -60,16 +60,10 @@
 		"WAHA_URL": "http://localhost:3000",
 		"WAHA_API_KEY": "your-waha-api-key"
 	},
-	/*
-	 * R2 bucket for file attachments.
-	 * Create a bucket: wrangler r2 bucket create voxcare-attachments
-	 * Then uncomment the block below.
-	 */
 	"r2_buckets": [
 		{
 			"binding": "ATTACHMENTS_BUCKET",
-			"bucket_name": "voxcare-attachments",
-			"preview_bucket_name": "voxcare-attachments-preview"
+			"bucket_name": "voxcare-attachments"
 		}
 	],
 	"kv_namespaces": [
