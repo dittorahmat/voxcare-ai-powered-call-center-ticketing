@@ -38,7 +38,7 @@ const ACTION_COLORS: Record<string, string> = {
 export function AuditLog() {
   const [entries, setEntries] = useState<AuditEntry[]>([]);
   const [loading, setLoading] = useState(true);
-  const [entityType, setEntityType] = useState('');
+  const [entityType, setEntityType] = useState('all');
 
   useEffect(() => { load(); }, [entityType]);
 
@@ -46,7 +46,7 @@ export function AuditLog() {
     setLoading(true);
     try {
       const params = new URLSearchParams();
-      if (entityType) params.set('entityType', entityType);
+      if (entityType && entityType !== 'all') params.set('entityType', entityType);
       const res = await apiGet<{ success: boolean; data: AuditEntry[] }>(`/api/audit?${params}`);
       setEntries((res.data || []).slice(0, 100));
     } catch {
@@ -67,9 +67,11 @@ export function AuditLog() {
         <div className="flex items-center gap-2">
           <Filter className="size-4 text-muted-foreground" />
           <Select value={entityType} onValueChange={setEntityType}>
-            <SelectTrigger className="w-40"><SelectValue placeholder="All types" /></SelectTrigger>
+            <SelectTrigger className="w-[180px]">
+              <SelectValue placeholder="Entity Type" />
+            </SelectTrigger>
             <SelectContent>
-              <SelectItem value="">All</SelectItem>
+              <SelectItem value="all">All Entities</SelectItem>
               <SelectItem value="ticket">Tickets</SelectItem>
               <SelectItem value="user">Users</SelectItem>
               <SelectItem value="customer">Customers</SelectItem>

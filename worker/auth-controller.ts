@@ -23,6 +23,43 @@ export class AuthController extends DurableObject<Env> {
       const storedSessions = await this.ctx.storage.get<Record<string, AuthSession>>('sessions') || {};
       this.users = new Map(Object.entries(storedUsers));
       this.sessions = new Map(Object.entries(storedSessions));
+
+      // Seed demo users if empty
+      if (this.users.size === 0) {
+        const demoUsers = [
+          { email: 'admin@voxcare.com', password: 'admin123', name: 'System Admin', role: 'admin' },
+          { email: 'supervisor@voxcare.com', password: 'super123', name: 'Team Supervisor', role: 'supervisor' },
+          { email: 'agent@voxcare.com', password: 'agent123', name: 'Support Agent', role: 'agent' },
+        ];
+
+        for (const u of demoUsers) {
+          const { hash, salt } = await AuthController.hashPassword(u.password);
+          const user: User = {
+            id: crypto.randomUUID(),
+            email: u.email,
+            name: u.name,
+            role: u.role as any,
+            passwordHash: hash,
+            passwordSalt: salt,
+            availability: 'available',
+            skills: u.role === 'agent' ? ['technical', 'billing'] : [],
+            lastAssignedAt: null,
+            totpSecret: null,
+            is2faEnabled: false,
+            notificationPrefs: {
+              soundEnabled: true,
+              desktopEnabled: true,
+              emailEnabled: true,
+              eventToggles: {},
+            },
+            active: true,
+            createdAt: new Date().toISOString(),
+          };
+          this.users.set(user.id, user);
+        }
+        await this.persistUsers();
+      }
+
       this.loaded = true;
     }
   }
@@ -61,37 +98,44 @@ export class AuthController extends DurableObject<Env> {
       keyMaterial,
       256
     );
-    return {
-      hash: btoa(String.fromCharCode(...new Uint8Array(derivedBits))),
-      salt: btoa(String.fromCharCode(...salt)),
-    };
+
+    // Use base64 encoding that is robust in Worker environment
+    const hashBase64 = btoa(String.fromCharCode(...new Uint8Array(derivedBits)));
+    const saltBase64 = btoa(String.fromCharCode(...salt));
+
+    return { hash: hashBase64, salt: saltBase64 };
   }
 
   /**
    * Verify a password against a stored hash and salt.
    */
   static async verifyPassword(password: string, storedHash: string, storedSalt: string): Promise<boolean> {
-    const encoder = new TextEncoder();
-    const salt = Uint8Array.from(atob(storedSalt), c => c.charCodeAt(0));
-    const keyMaterial = await crypto.subtle.importKey(
-      'raw',
-      encoder.encode(password),
-      'PBKDF2',
-      false,
-      ['deriveBits']
-    );
-    const derivedBits = await crypto.subtle.deriveBits(
-      {
-        name: 'PBKDF2',
-        salt,
-        iterations: 100_000,
-        hash: 'SHA-256',
-      },
-      keyMaterial,
-      256
-    );
-    const computedHash = btoa(String.fromCharCode(...new Uint8Array(derivedBits)));
-    return computedHash === storedHash;
+    try {
+      const encoder = new TextEncoder();
+      const salt = Uint8Array.from(atob(storedSalt), c => c.charCodeAt(0));
+      const keyMaterial = await crypto.subtle.importKey(
+        'raw',
+        encoder.encode(password),
+        'PBKDF2',
+        false,
+        ['deriveBits']
+      );
+      const derivedBits = await crypto.subtle.deriveBits(
+        {
+          name: 'PBKDF2',
+          salt,
+          iterations: 100_000,
+          hash: 'SHA-256',
+        },
+        keyMaterial,
+        256
+      );
+      const computedHash = btoa(String.fromCharCode(...new Uint8Array(derivedBits)));
+      return computedHash === storedHash;
+    } catch (e) {
+      console.error('Password verification failed:', e);
+      return false;
+    }
   }
 
   // ─── JWT Token Generation ──────────────────────────────────
@@ -100,27 +144,20 @@ export class AuthController extends DurableObject<Env> {
    * Generate an access token (JWT, 1-hour expiry).
    */
   async generateAccessToken(user: User): Promise<string> {
-    const secret = this.env.JWT_SECRET || 'dev-secret-change-me';
-    const payload: AuthTokenPayload = {
+    const secret = (this.env as any)?.JWT_SECRET || 'dev-secret-change-me';
+    const secretKey = new TextEncoder().encode(secret);
+
+    const token = await new jose.SignJWT({
       sub: user.id,
       role: user.role,
       name: user.name,
-      iat: Math.floor(Date.now() / 1000),
-      exp: Math.floor(Date.now() / 1000) + 3600, // 1 hour
-    };
-    const encoder = new TextEncoder();
-    const key = await crypto.subtle.importKey(
-      'raw',
-      encoder.encode(secret),
-      { name: 'HMAC', hash: 'SHA-256' },
-      false,
-      ['sign']
-    );
-    const token = await jose.SignJWT(payload)
+      email: user.email,
+    })
       .setProtectedHeader({ alg: 'HS256' })
-      .setIssuedAt(payload.iat)
-      .setExpirationTime(payload.exp)
-      .sign(key);
+      .setIssuedAt()
+      .setExpirationTime('1h')
+      .sign(secretKey);
+    
     return token;
   }
 

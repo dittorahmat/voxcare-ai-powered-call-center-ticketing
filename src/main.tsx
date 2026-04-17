@@ -151,5 +151,3 @@ createRoot(document.getElementById('root')!).render(
     </AuthProvider>
   </StrictMode>,
 );
-
-useTicketStore.getState().initialize().catch(console.error);

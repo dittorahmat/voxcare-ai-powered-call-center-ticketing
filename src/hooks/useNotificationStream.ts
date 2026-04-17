@@ -25,7 +25,7 @@ export function useNotificationStream({ onEvent, onConnected, enabled = true }: 
     const token = localStorage.getItem('accessToken');
     if (!token) return;
 
-    const url = `/api/notifications/stream`;
+    const url = `/api/notifications/stream?token=${encodeURIComponent(token)}`;
     const es = new EventSource(url);
 
     es.onopen = () => {

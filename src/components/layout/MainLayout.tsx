@@ -11,14 +11,22 @@ import { NotificationDropdown } from "@/components/notifications/NotificationDro
 import { CommandPalette } from "@/components/CommandPalette";
 import { useHotkeys } from "react-hotkeys-hook";
 import { useNotificationStream } from "@/hooks/useNotificationStream";
+import { useTicketStore } from "@/store/ticketStore";
 
 export function MainLayout(): JSX.Element {
-  const { user } = useAuth();
+  const { user, isAuthenticated } = useAuth();
   const navigate = useNavigate();
   const [unreadCount, setUnreadCount] = useState(0);
   const [cmdOpen, setCmdOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  // Initialize ticket store on mount - only if authenticated
+  useEffect(() => {
+    if (isAuthenticated) {
+      useTicketStore.getState().initialize().catch(console.error);
+    }
+  }, [isAuthenticated]);
 
   // SSE real-time notifications
   const { isConnected } = useNotificationStream({

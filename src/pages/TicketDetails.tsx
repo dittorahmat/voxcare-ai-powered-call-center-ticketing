@@ -380,7 +380,7 @@ export function TicketDetails() {
                              <Select value={selectedCanned} onValueChange={applyCannedResponse}>
                                <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Insert canned response..." /></SelectTrigger>
                                <SelectContent>
-                                 {cannedResponses.map(cr => <SelectItem key={cr.id} value={cr.id}>{cr.name}</SelectItem>)}
+                                 {cannedResponses.filter(cr => cr.id).map(cr => <SelectItem key={cr.id} value={cr.id}>{cr.name}</SelectItem>)}
                                </SelectContent>
                              </Select>
                            </div>

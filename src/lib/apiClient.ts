@@ -14,10 +14,15 @@ function getAuthHeaders(): Record<string, string> {
 
 async function handleResponse<T>(response: Response): Promise<T> {
   if (response.status === 401) {
-    // Token expired — clear tokens and redirect to login
+    // Token expired — clear tokens and redirect to login if not already there
     localStorage.removeItem('accessToken');
     localStorage.removeItem('refreshToken');
-    window.location.href = '/login?redirect=' + encodeURIComponent(window.location.pathname);
+    
+    // Only redirect if we're not already on a login/public page to avoid loops
+    const path = window.location.pathname;
+    if (!path.includes('/login') && !path.includes('/public/') && !path.includes('/kb')) {
+      window.location.href = '/login?redirect=' + encodeURIComponent(path);
+    }
     throw new Error('Unauthorized');
   }
   if (response.status === 403) {

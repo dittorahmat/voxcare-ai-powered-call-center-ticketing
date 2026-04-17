@@ -17,6 +17,8 @@ export interface Env {
     EMAIL_FROM_NAME: string;
     BROWSER_RENDERING_API_URL: string;
     BROWSER_RENDERING_API_KEY: string;
+    WAHA_URL: string;
+    WAHA_API_KEY: string;
     CHAT_AGENT: DurableObjectNamespace<ChatAgent>;
     APP_CONTROLLER: DurableObjectNamespace<AppController>;
     AUTH_CONTROLLER: DurableObjectNamespace<AuthController>;
@@ -29,6 +31,9 @@ export interface Env {
  * Uses a singleton pattern with fixed ID for consistent routing
  */
 export function getAppController(env: Env): DurableObjectStub<AppController> {
+  if (!env?.APP_CONTROLLER) {
+    throw new Error('APP_CONTROLLER binding is missing. Check your wrangler.jsonc or .dev.vars');
+  }
   const id = env.APP_CONTROLLER.idFromName("controller");
   return env.APP_CONTROLLER.get(id);
 }
@@ -38,6 +43,9 @@ export function getAppController(env: Env): DurableObjectStub<AppController> {
  * Uses a singleton pattern with fixed ID for consistent routing
  */
 export function getAuthController(env: Env): DurableObjectStub<AuthController> {
+  if (!env?.AUTH_CONTROLLER) {
+    throw new Error('AUTH_CONTROLLER binding is missing. Check your wrangler.jsonc or .dev.vars');
+  }
   const id = env.AUTH_CONTROLLER.idFromName("auth");
   return env.AUTH_CONTROLLER.get(id);
 }

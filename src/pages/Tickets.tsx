@@ -31,7 +31,8 @@ const STATUS_COLORS: Record<string, string> = {
 };
 
 export function Tickets() {
-  const { tickets: storeTickets, isLoading: storeLoading } = useTicketStore(s => ({ tickets: s.tickets, isLoading: s.isLoading }));
+  const storeTickets = useTicketStore(s => s.tickets);
+  const storeLoading = useTicketStore(s => s.isLoading);
   const [searchQuery, setSearchQuery] = useState('');
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(20);

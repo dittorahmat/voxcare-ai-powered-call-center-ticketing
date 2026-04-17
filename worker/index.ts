@@ -41,7 +41,7 @@ export interface ClientErrorReport {
 }
 
 type UserRoutesModule = {
-  userRoutes: (app: Hono<{ Bindings: Env }>) => void;
+  userRoutes: (app: Hono<{ Bindings: Env }>) => Promise<void>;
   coreRoutes: (app: Hono<{ Bindings: Env }>) => void;
 };
 
@@ -62,8 +62,13 @@ const safeLoadUserRoutes = async (app: Hono<{ Bindings: Env }>) => {
   try {
     const spec = shouldRetry ? `./userRoutes?t=${now}` : "./userRoutes";
     const mod = (await import(/* @vite-ignore */ spec)) as UserRoutesModule;
-    mod.userRoutes(app);
-    mod.coreRoutes(app);
+    
+    // Only register if not already loaded to prevent Hono conflicts
+    if (!userRoutesLoaded) {
+      await mod.userRoutes(app);
+      mod.coreRoutes(app);
+    }
+    
     userRoutesLoaded = true;
     userRoutesLoadError = null;
   } catch (e) {
@@ -72,6 +77,16 @@ const safeLoadUserRoutes = async (app: Hono<{ Bindings: Env }>) => {
 };
 
 const app = new Hono<{ Bindings: Env }>();
+
+app.onError((err, c) => {
+  console.error('[Hono Error]', err);
+  const isProd = (c.env as any)?.ENVIRONMENT === 'production';
+  return c.json({ 
+    success: false, 
+    error: err.message, 
+    stack: isProd ? undefined : err.stack 
+  }, 500);
+});
 
 /** DO NOT TOUCH THE CODE BELOW THIS LINE */
 // Middleware

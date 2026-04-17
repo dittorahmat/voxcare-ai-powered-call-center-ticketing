@@ -61,7 +61,7 @@ export function coreRoutes(app: Hono<{ Bindings: Env }>) {
         }
     });
 }
-export function userRoutes(app: Hono<{ Bindings: Env }>) {
+export async function userRoutes(app: Hono<{ Bindings: Env }>) {
     // ─── Auth Routes (public) ──────────────────────────────────
     app.post('/api/auth/login', async (c) => {
         const { email, password } = await c.req.json();
@@ -85,7 +85,7 @@ export function userRoutes(app: Hono<{ Bindings: Env }>) {
             });
         }
         const accessToken = await ac.generateAccessToken(user);
-        const refreshToken = ac.generateRefreshToken();
+        const refreshToken = await ac.generateRefreshToken();
         await ac.storeSession(user.id, refreshToken);
         return c.json({
             success: true,
@@ -115,7 +115,7 @@ export function userRoutes(app: Hono<{ Bindings: Env }>) {
             return c.json({ success: false, error: 'Invalid authentication code' }, { status: 401 });
         }
         const accessToken = await ac.generateAccessToken(user);
-        const refreshToken = ac.generateRefreshToken();
+        const refreshToken = await ac.generateRefreshToken();
         await ac.storeSession(user.id, refreshToken);
         return c.json({
             success: true,
@@ -598,52 +598,62 @@ export function userRoutes(app: Hono<{ Bindings: Env }>) {
     // ─── Notification Routes ─────────────────────────────────
     app.get('/api/notifications/stream', authMiddleware(), async (c) => {
         const user = getUser(c);
-        const { readable, writable } = new TransformStream();
-        const writer = writable.getWriter();
-        const encoder = new TextEncoder();
+        
+        const stream = new ReadableStream({
+            async start(controller) {
+                const encoder = new TextEncoder();
+                
+                // Send initial connected event
+                controller.enqueue(encoder.encode(`event: connected\ndata: {"message":"Connected"}\nid:0\n\n`));
 
-        // Send initial connected event
-        await writer.write(encoder.encode(`event: connected\ndata: {"message":"Connected"}\nid:0\n\n`));
-
-        // Heartbeat every 30s
-        const heartbeat = setInterval(async () => {
-            try {
-                await writer.write(encoder.encode(`: heartbeat\n\n`));
-            } catch {
-                clearInterval(heartbeat);
-            }
-        }, 30000);
-
-        // Poll for new notifications
-        const pollInterval = setInterval(async () => {
-            try {
-                const controller = getAppController(c.env);
-                const notifications = await controller.listNotifications(user.sub);
-                const unread = notifications.filter(n => !n.read);
-                if (unread.length > 0) {
-                    for (const n of unread.slice(0, 5)) {
-                        const event = `event: ${n.type}\ndata: ${JSON.stringify({ id: n.id, type: n.type, createdAt: n.createdAt, data: n.data })}\nid:${n.id}\n\n`;
-                        await writer.write(encoder.encode(event));
+                let lastPoll = Date.now();
+                
+                const poll = async () => {
+                    try {
+                        const appController = getAppController(c.env);
+                        const notifications = await appController.listNotifications(user.sub);
+                        // Only send notifications created after the stream started or last poll
+                        const unread = notifications.filter(n => !n.read);
+                        
+                        for (const n of unread.slice(0, 10)) {
+                            const event = `event: ${n.type}\ndata: ${JSON.stringify({ id: n.id, type: n.type, createdAt: n.createdAt, data: n.data })}\nid:${n.id}\n\n`;
+                            controller.enqueue(encoder.encode(event));
+                        }
+                    } catch (e) {
+                        console.error('[SSE Poll Error]', e);
                     }
-                }
-            } catch {
-                // Ignore poll errors
-            }
-        }, 5000);
+                };
 
-        // Cleanup on client disconnect
-        c.req.raw.signal.addEventListener('abort', () => {
-            clearInterval(heartbeat);
-            clearInterval(pollInterval);
-            writer.close().catch(() => {});
+                // Setup interval-like behavior using a loop
+                const intervalId = setInterval(async () => {
+                    await poll();
+                }, 5000);
+
+                const heartbeatId = setInterval(() => {
+                    try {
+                        controller.enqueue(encoder.encode(`: heartbeat\n\n`));
+                    } catch (e) {
+                        // Stream closed
+                    }
+                }, 30000);
+
+                // Handle cleanup
+                c.req.raw.signal.addEventListener('abort', () => {
+                    clearInterval(intervalId);
+                    clearInterval(heartbeatId);
+                    try { controller.close(); } catch (e) {}
+                });
+            },
+            cancel() {
+                // Cleanup handled by signal listener
+            }
         });
 
-        return new Response(readable, {
+        return new Response(stream, {
             headers: {
                 'Content-Type': 'text/event-stream',
                 'Cache-Control': 'no-cache',
                 'Connection': 'keep-alive',
-                'X-Accel-Buffering': 'no',
             },
         });
     });
@@ -1025,10 +1035,10 @@ export function userRoutes(app: Hono<{ Bindings: Env }>) {
             return c.json({ success: false, error: 'Unknown report type. Use: ticket-summary, sla-compliance, agent-performance' }, { status: 400 });
         }
 
-        const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${companyName} Report</title></head><body style="font-family: Arial, sans-serif; padding: 24px; color: #334155;">${bodyContent}<p style="margin-top: 24px; color: #94a3b8; font-size: 11px;">Laporan otomatis dari ${companyName}. <a href="${c.env.APP_URL || 'http://localhost:5173'}" style="color: #6366f1;">Lihat di Dashboard →</a></p></body></html>`;
+        const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${companyName} Report</title></head><body style="font-family: Arial, sans-serif; padding: 24px; color: #334155;">${bodyContent}<p style="margin-top: 24px; color: #94a3b8; font-size: 11px;">Laporan otomatis dari ${companyName}. <a href="${(c.env as any).APP_URL || 'http://localhost:3000'}" style="color: #6366f1;">Lihat di Dashboard →</a></p></body></html>`;
 
         // Try Browser Rendering API for PDF
-        const appUrl = c.env.APP_URL || 'http://localhost:5173';
+        const appUrl = (c.env as any).APP_URL || 'http://localhost:3000';
         if (c.env.BROWSER_RENDERING_API_URL && c.env.BROWSER_RENDERING_API_KEY) {
             try {
                 const pdfBlob = await generatePDFViaBrowserRendering(html, c.env);
@@ -2388,7 +2398,7 @@ export function userRoutes(app: Hono<{ Bindings: Env }>) {
     });
 
     // ─── Knowledge Base ──────────────────────────────────────
-    const { storeArticle, getArticle, listArticles, deleteArticle, incrementArticleFeedback, searchArticlesForTicket } = await import('./knowledge-base');
+
 
     app.post('/api/knowledge-base/articles', authMiddleware(), async (c) => {
         const user = getUser(c);

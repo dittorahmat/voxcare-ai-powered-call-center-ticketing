@@ -43,15 +43,29 @@ const clearTokens = () => {
 // Decode JWT without verification (client-side only — server verifies)
 const decodeUser = (token: string): User | null => {
   try {
-    const payload = JSON.parse(atob(token.split('.')[1]));
-    if (payload.exp * 1000 < Date.now()) return null;
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+    
+    // JWT uses Base64URL, which atob might not like
+    let base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    while (base64.length % 4) base64 += '=';
+    
+    const payload = JSON.parse(atob(base64));
+    
+    // Check if token is expired
+    if (payload.exp && payload.exp * 1000 < Date.now()) {
+      console.warn('[Auth] Token expired');
+      return null;
+    }
+    
     return {
       id: payload.sub,
       email: payload.email || '',
-      name: payload.name,
+      name: payload.name || '',
       role: payload.role,
     };
-  } catch {
+  } catch (e) {
+    console.error('[Auth] Failed to decode token:', e);
     return null;
   }
 };
@@ -80,6 +94,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // Token expired — try refresh
       const refreshOk = await refreshTokenInternal();
       if (!refreshOk) {
+        console.warn('[Auth] Session restoration failed');
         clearTokens();
         setState({ user: null, isLoading: false, isAuthenticated: false });
       }
@@ -102,10 +117,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (requires2fa) {
         return { success: true, requires2fa: true, userId };
       }
+      
+      // Store tokens
       setTokens(accessToken, refreshToken);
+      
+      // Give localStorage a tiny bit of time to settle before triggering state change
+      // which often leads to immediate API calls in layouts/pages
+      await new Promise(resolve => setTimeout(resolve, 50));
+      
       setState({ user, isLoading: false, isAuthenticated: true });
       return { success: true };
-    } catch {
+    } catch (e) {
+      console.error('[Auth] Login error:', e);
       return { success: false, error: 'Network error. Please try again.' };
     }
   }, []);
